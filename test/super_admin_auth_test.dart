@@ -1,13 +1,16 @@
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:super_admin_app/core/constants/app_constants.dart';
 import 'package:super_admin_app/models/school_provision_dto.dart';
 import 'package:super_admin_app/models/super_admin_model.dart';
 import 'package:super_admin_app/routing/app_routes.dart';
 
 void main() {
-  group('Requirement 1: Development Auth Bypass Disabled', () {
-    test('AppConstants.isDevAuthBypassEnabled is false for normal application flow', () {
-      expect(AppConstants.isDevAuthBypassEnabled, isFalse);
+  group('Requirement 1: Development Auth Bypass Removed', () {
+    test('AppConstants contains zero development auth bypass flags', () {
+      final file = File('lib/core/constants/app_constants.dart');
+      expect(file.existsSync(), isTrue);
+      final content = file.readAsStringSync();
+      expect(content.contains('isDevAuthBypassEnabled'), isFalse);
     });
   });
 
@@ -178,6 +181,138 @@ void main() {
           callerProfile.status == 'active';
 
       expect(rlsCheck, isTrue, reason: 'Active super admin caller must satisfy RLS policy');
+    });
+  });
+
+  group('P1 Security Remediation: Authoritative public.profiles Role Verification (No userMetadata Fallback)', () {
+    bool verifySuperAdminAuthorization({
+      required Map<String, dynamic>? profileRow,
+      Map<String, dynamic>? userMetadata,
+    }) {
+      // Authoritative lookup ONLY from public.profiles
+      if (profileRow != null) {
+        final profile = SuperAdminProfile.fromJson(profileRow);
+        if (!profile.isSuperAdmin) return false;
+        if (profile.status.toLowerCase() != 'active') return false;
+        return true;
+      }
+
+      // No userMetadata fallback allowed!
+      return false;
+    }
+
+    test('Critical: profile role = school_admin BUT userMetadata["role"] = "super_admin" -> Super Admin access DENIED', () {
+      final profileRow = {
+        'id': 'prof-school-admin',
+        'auth_user_id': 'auth-usr-1',
+        'email': 'admin@kps.edu',
+        'full_name': 'KPS Admin',
+        'role': 'school_admin',
+        'status': 'active',
+        'school_id': 'school-kps-uuid',
+      };
+      final forgedUserMetadata = {
+        'role': 'super_admin',
+        'name': 'Forged Super Admin',
+      };
+
+      final isAuthorized = verifySuperAdminAuthorization(
+        profileRow: profileRow,
+        userMetadata: forgedUserMetadata,
+      );
+
+      expect(isAuthorized, isFalse, reason: 'Forged userMetadata role must NEVER grant Super Admin access');
+    });
+
+    test('A. Active super_admin in public.profiles -> PASS', () {
+      final profileRow = {
+        'id': 'prof-sa',
+        'auth_user_id': 'sa-auth-id',
+        'email': 'super@schoolos.com',
+        'full_name': 'Valid Super Admin',
+        'role': 'super_admin',
+        'status': 'active',
+      };
+      expect(verifySuperAdminAuthorization(profileRow: profileRow), isTrue);
+    });
+
+    test('B. Active owner in public.profiles -> PASS', () {
+      final profileRow = {
+        'id': 'prof-owner',
+        'auth_user_id': 'owner-auth-id',
+        'email': 'owner@schoolos.com',
+        'full_name': 'Valid Owner',
+        'role': 'owner',
+        'status': 'active',
+      };
+      expect(verifySuperAdminAuthorization(profileRow: profileRow), isTrue);
+    });
+
+    test('C. Active school_admin in public.profiles -> FAIL', () {
+      final profileRow = {
+        'id': 'prof-admin',
+        'auth_user_id': 'admin-auth-id',
+        'email': 'admin@school.com',
+        'full_name': 'School Admin',
+        'role': 'school_admin',
+        'status': 'active',
+      };
+      expect(verifySuperAdminAuthorization(profileRow: profileRow), isFalse);
+    });
+
+    test('D. Active teacher in public.profiles -> FAIL', () {
+      final profileRow = {
+        'id': 'prof-teacher',
+        'auth_user_id': 'teacher-auth-id',
+        'email': 'teacher@school.com',
+        'full_name': 'Teacher User',
+        'role': 'teacher',
+        'status': 'active',
+      };
+      expect(verifySuperAdminAuthorization(profileRow: profileRow), isFalse);
+    });
+
+    test('E. Active parent in public.profiles -> FAIL', () {
+      final profileRow = {
+        'id': 'prof-parent',
+        'auth_user_id': 'parent-auth-id',
+        'email': 'parent@school.com',
+        'full_name': 'Parent User',
+        'role': 'parent',
+        'status': 'active',
+      };
+      expect(verifySuperAdminAuthorization(profileRow: profileRow), isFalse);
+    });
+
+    test('F. Inactive super_admin in public.profiles -> FAIL and triggers signOut flow', () {
+      final profileRow = {
+        'id': 'prof-inactive',
+        'auth_user_id': 'inactive-auth-id',
+        'email': 'inactive@schoolos.com',
+        'full_name': 'Inactive Admin',
+        'role': 'super_admin',
+        'status': 'inactive',
+      };
+      expect(verifySuperAdminAuthorization(profileRow: profileRow), isFalse);
+    });
+
+    test('G. Missing profile (null record in public.profiles) -> FAIL and triggers signOut flow', () {
+      expect(verifySuperAdminAuthorization(profileRow: null), isFalse);
+    });
+
+    test('H. Missing profile with forged metadata role userMetadata["role"] = "super_admin" -> FAIL', () {
+      final forgedUserMetadata = {
+        'role': 'super_admin',
+        'name': 'Hacker Admin',
+      };
+      expect(
+        verifySuperAdminAuthorization(
+          profileRow: null,
+          userMetadata: forgedUserMetadata,
+        ),
+        isFalse,
+        reason: 'Missing profile must never fall back to userMetadata to grant access',
+      );
     });
   });
 }

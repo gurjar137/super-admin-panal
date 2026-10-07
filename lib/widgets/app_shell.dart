@@ -165,6 +165,12 @@ class AppShell extends ConsumerWidget {
                   label: 'Settings & Profile',
                   onTap: () => _onNavigate(3),
                 ),
+                const SizedBox(height: 4),
+                _sidebarDirectItem(
+                  icon: Icons.history_edu_rounded,
+                  label: 'Audit Logs',
+                  onTap: () => context.go(AppRoutes.auditLogs),
+                ),
                 const SizedBox(height: 16),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -299,6 +305,42 @@ class AppShell extends ConsumerWidget {
                 color: isSelected ? Colors.white : AppColors.textOnDarkMuted,
                 fontSize: 14,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sidebarDirectItem({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: AppColors.textOnDarkMuted,
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.textOnDarkMuted,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],

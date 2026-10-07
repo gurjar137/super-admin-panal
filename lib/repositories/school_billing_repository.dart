@@ -111,13 +111,44 @@ class InvoiceFilterParams {
   final String? billingPeriod;
   final String? statusFilter;
   final String? searchQuery;
+  final int page;
+  final int pageSize;
 
   const InvoiceFilterParams({
     this.schoolId,
     this.billingPeriod,
     this.statusFilter,
     this.searchQuery,
+    this.page = 0,
+    this.pageSize = 25,
   });
+
+  InvoiceFilterParams copyWith({
+    String? schoolId,
+    String? billingPeriod,
+    String? statusFilter,
+    String? searchQuery,
+    int? page,
+    int? pageSize,
+  }) {
+    final newSchoolId = schoolId ?? this.schoolId;
+    final newBillingPeriod = billingPeriod ?? this.billingPeriod;
+    final newStatusFilter = statusFilter ?? this.statusFilter;
+    final newSearchQuery = searchQuery ?? this.searchQuery;
+    final isFilterChanged = newSchoolId != this.schoolId ||
+        newBillingPeriod != this.billingPeriod ||
+        newStatusFilter != this.statusFilter ||
+        newSearchQuery != this.searchQuery;
+
+    return InvoiceFilterParams(
+      schoolId: newSchoolId,
+      billingPeriod: newBillingPeriod,
+      statusFilter: newStatusFilter,
+      searchQuery: newSearchQuery,
+      page: isFilterChanged && page == null ? 0 : (page ?? this.page),
+      pageSize: pageSize ?? this.pageSize,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -127,10 +158,19 @@ class InvoiceFilterParams {
           schoolId == other.schoolId &&
           billingPeriod == other.billingPeriod &&
           statusFilter == other.statusFilter &&
-          searchQuery == other.searchQuery;
+          searchQuery == other.searchQuery &&
+          page == other.page &&
+          pageSize == other.pageSize;
 
   @override
-  int get hashCode => Object.hash(schoolId, billingPeriod, statusFilter, searchQuery);
+  int get hashCode => Object.hash(
+        schoolId,
+        billingPeriod,
+        statusFilter,
+        searchQuery,
+        page,
+        pageSize,
+      );
 }
 
 /// Riverpod family provider for filtered invoices
@@ -142,11 +182,26 @@ final filteredInvoicesProvider =
     billingPeriod: params.billingPeriod,
     statusFilter: params.statusFilter,
     searchQuery: params.searchQuery,
+    page: params.page,
+    pageSize: params.pageSize,
   );
   if (result.isFailure) {
     throw Exception(result.errorOrNull ?? 'Failed to load filtered invoices');
   }
   return result.dataOrNull ?? [];
+});
+
+/// Riverpod family provider for filtered invoices count
+final filteredInvoicesCountProvider =
+    FutureProvider.family.autoDispose<int, InvoiceFilterParams>((ref, params) async {
+  final repo = ref.watch(schoolBillingRepositoryProvider);
+  final result = await repo.getFilteredInvoicesCount(
+    schoolId: params.schoolId,
+    billingPeriod: params.billingPeriod,
+    statusFilter: params.statusFilter,
+    searchQuery: params.searchQuery,
+  );
+  return result.dataOrNull ?? 0;
 });
 
 class SchoolBillingRepository {
@@ -189,8 +244,25 @@ class SchoolBillingRepository {
     String? billingPeriod,
     String? statusFilter,
     String? searchQuery,
+    int? page,
+    int? pageSize,
   }) =>
       _service.fetchFilteredInvoices(
+        schoolId: schoolId,
+        billingPeriod: billingPeriod,
+        statusFilter: statusFilter,
+        searchQuery: searchQuery,
+        page: page,
+        pageSize: pageSize,
+      );
+
+  Future<ApiResult<int>> getFilteredInvoicesCount({
+    String? schoolId,
+    String? billingPeriod,
+    String? statusFilter,
+    String? searchQuery,
+  }) =>
+      _service.fetchFilteredInvoicesCount(
         schoolId: schoolId,
         billingPeriod: billingPeriod,
         statusFilter: statusFilter,

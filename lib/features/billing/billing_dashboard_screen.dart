@@ -19,6 +19,8 @@ class _BillingDashboardScreenState extends ConsumerState<BillingDashboardScreen>
   String _selectedPeriod = 'All Time';
   String _statusFilter = 'ALL';
   String _searchQuery = '';
+  int _currentPage = 0;
+  final int _pageSize = 25;
   final TextEditingController _searchCtrl = TextEditingController();
 
   final List<String> _periods = [
@@ -148,8 +150,11 @@ class _BillingDashboardScreenState extends ConsumerState<BillingDashboardScreen>
       statusFilter: _statusFilter,
       searchQuery: _searchQuery,
       billingPeriod: _selectedPeriod == 'All Time' ? null : _selectedPeriod,
+      page: _currentPage,
+      pageSize: _pageSize,
     );
     final invoicesAsync = ref.watch(filteredInvoicesProvider(filterParams));
+    final countAsync = ref.watch(filteredInvoicesCountProvider(filterParams));
     final dateFormat = DateFormat('dd MMM yyyy');
 
     return Scaffold(
@@ -197,7 +202,12 @@ class _BillingDashboardScreenState extends ConsumerState<BillingDashboardScreen>
                         return DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontWeight: FontWeight.w600)));
                       }).toList(),
                       onChanged: (val) {
-                        if (val != null) setState(() => _selectedPeriod = val);
+                        if (val != null) {
+                          setState(() {
+                            _selectedPeriod = val;
+                            _currentPage = 0;
+                          });
+                        }
                       },
                     ),
                   ),
@@ -309,14 +319,20 @@ class _BillingDashboardScreenState extends ConsumerState<BillingDashboardScreen>
                                       icon: const Icon(Icons.clear, size: 16),
                                       onPressed: () {
                                         _searchCtrl.clear();
-                                        setState(() => _searchQuery = '');
+                                        setState(() {
+                                          _searchQuery = '';
+                                          _currentPage = 0;
+                                        });
                                       },
                                     )
                                   : null,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                             ),
-                            onChanged: (val) => setState(() => _searchQuery = val),
+                            onChanged: (val) => setState(() {
+                              _searchQuery = val;
+                              _currentPage = 0;
+                            }),
                           ),
                         ),
                       ],
@@ -428,6 +444,9 @@ class _BillingDashboardScreenState extends ConsumerState<BillingDashboardScreen>
                         );
                       },
                     ),
+
+                    const SizedBox(height: 16),
+                    _buildInvoicePaginationBar(invoicesAsync, countAsync),
                   ],
                 ),
               ),
@@ -438,13 +457,70 @@ class _BillingDashboardScreenState extends ConsumerState<BillingDashboardScreen>
     );
   }
 
+  Widget _buildInvoicePaginationBar(
+    AsyncValue<List<SchoolInvoiceModel>> invoicesAsync,
+    AsyncValue<int> countAsync,
+  ) {
+    final totalCount = countAsync.asData?.value;
+    final invoices = invoicesAsync.asData?.value ?? [];
+    final isLoading = invoicesAsync.isLoading;
+
+    final startItem = invoices.isEmpty ? 0 : _currentPage * _pageSize + 1;
+    final endItem = invoices.isEmpty ? 0 : _currentPage * _pageSize + invoices.length;
+
+    final countText = totalCount != null
+        ? 'Showing $startItem–$endItem of $totalCount invoices'
+        : 'Showing $startItem–$endItem invoices';
+
+    final hasNext = totalCount != null
+        ? (_currentPage + 1) * _pageSize < totalCount
+        : invoices.length == _pageSize;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            countText,
+            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: (!isLoading && _currentPage > 0)
+                    ? () => setState(() => _currentPage--)
+                    : null,
+                icon: const Icon(Icons.chevron_left, size: 18),
+                label: const Text('Previous'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: (!isLoading && hasNext)
+                    ? () => setState(() => _currentPage++)
+                    : null,
+                icon: const Icon(Icons.chevron_right, size: 18),
+                label: const Text('Next'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _filterChip(String statusKey, String label) {
     final isSelected = _statusFilter == statusKey;
     return ChoiceChip(
       label: Text(label),
       selected: isSelected,
       onSelected: (selected) {
-        if (selected) setState(() => _statusFilter = statusKey);
+        if (selected) {
+          setState(() {
+            _statusFilter = statusKey;
+            _currentPage = 0;
+          });
+        }
       },
       selectedColor: AppColors.primary,
       labelStyle: TextStyle(

@@ -5,10 +5,21 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/config/supabase_config.dart';
 import '../core/network/api_result.dart';
 import '../models/school_admin_model.dart';
+import 'audit_log_service.dart';
 import 'supabase_service.dart';
 
 class SchoolAdminService {
-  SupabaseClient? get _client => SupabaseService.instance.client;
+  final SupabaseClient? _customClient;
+  final AuditLogService _auditLogService;
+
+  SchoolAdminService({
+    SupabaseClient? client,
+    AuditLogService? auditLogService,
+  })  : _customClient = client,
+        _auditLogService = auditLogService ?? AuditLogService(client: client);
+
+  SupabaseClient? get _client => _customClient ?? SupabaseService.instance.client;
+  AuditLogService get auditLogService => _auditLogService;
 
   static const String _profileColumns =
       'id, auth_user_id, school_id, full_name, email, phone, role, status, designation, created_at, updated_at';
@@ -179,6 +190,25 @@ class SchoolAdminService {
 
       final adminModel = SchoolAdminModel.fromJson(inserted);
       debugPrint('[SchoolAdminService] School Admin profile successfully created: ${adminModel.id}');
+
+      // Persistent Audit Logging: admin_created
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'admin_created',
+          entityType: 'admin',
+          entityId: adminModel.id,
+          schoolId: schoolId,
+          metadata: {
+            'action_category': 'school_admin',
+            'admin_name': adminModel.fullName,
+            'email': adminModel.email,
+            'role': adminModel.role,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolAdminService] Audit admin_created notice: $auditErr');
+      }
+
       return ApiResult.success(adminModel);
     } catch (e) {
       debugPrint('[SchoolAdminService] createSchoolAdmin error: $e');
@@ -216,7 +246,26 @@ class SchoolAdminService {
           .select(_profileColumns)
           .single();
 
-      return ApiResult.success(SchoolAdminModel.fromJson(updated));
+      final updatedModel = SchoolAdminModel.fromJson(updated);
+
+      // Persistent Audit Logging: admin_updated
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'admin_updated',
+          entityType: 'admin',
+          entityId: profileId,
+          schoolId: updatedModel.schoolId,
+          metadata: {
+            'action_category': 'school_admin',
+            'admin_name': updatedModel.fullName,
+            'email': updatedModel.email,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolAdminService] Audit admin_updated notice: $auditErr');
+      }
+
+      return ApiResult.success(updatedModel);
     } catch (e) {
       debugPrint('[SchoolAdminService] updateSchoolAdminProfile error: $e');
       return ApiResult.failure('Failed to update administrator profile: $e', e);
@@ -251,7 +300,28 @@ class SchoolAdminService {
           .select(_profileColumns)
           .single();
 
-      return ApiResult.success(SchoolAdminModel.fromJson(updated));
+      final updatedModel = SchoolAdminModel.fromJson(updated);
+
+      // Persistent Audit Logging: admin_deactivated or admin_reactivated
+      try {
+        final action = normalizedStatus == 'active' ? 'admin_reactivated' : 'admin_deactivated';
+        await _auditLogService.recordAuditEvent(
+          action: action,
+          entityType: 'admin',
+          entityId: profileId,
+          schoolId: updatedModel.schoolId,
+          metadata: {
+            'action_category': 'school_admin',
+            'admin_name': updatedModel.fullName,
+            'email': updatedModel.email,
+            'new_status': normalizedStatus,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolAdminService] Audit admin status notice: $auditErr');
+      }
+
+      return ApiResult.success(updatedModel);
     } catch (e) {
       debugPrint('[SchoolAdminService] updateSchoolAdminStatus error: $e');
       return ApiResult.failure('Failed to update administrator status: $e', e);

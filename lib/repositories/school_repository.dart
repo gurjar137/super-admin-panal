@@ -27,8 +27,21 @@ class SchoolRepository {
   Future<ApiResult<List<SchoolModel>>> getSchools({
     String? searchQuery,
     SchoolStatus? statusFilter,
+    int? page,
+    int? pageSize,
   }) =>
       _schoolService.fetchSchools(
+        searchQuery: searchQuery,
+        statusFilter: statusFilter,
+        page: page,
+        pageSize: pageSize,
+      );
+
+  Future<ApiResult<int>> getSchoolsCount({
+    String? searchQuery,
+    SchoolStatus? statusFilter,
+  }) =>
+      _schoolService.fetchSchoolsCount(
         searchQuery: searchQuery,
         statusFilter: statusFilter,
       );

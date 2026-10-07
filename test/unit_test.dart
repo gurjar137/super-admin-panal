@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:super_admin_app/models/dashboard_stats.dart';
-import 'package:super_admin_app/models/product_model.dart';
 import 'package:super_admin_app/models/school_app_model.dart';
 import 'package:super_admin_app/models/school_model.dart';
 import 'package:super_admin_app/models/school_provision_dto.dart';
@@ -51,26 +50,6 @@ void main() {
 
       expect(school.schoolCode, 'SCH002');
       expect(school.status, SchoolStatus.inactive);
-    });
-  });
-
-  group('ProductModel Tests', () {
-    test('Correctly parses product from JSON', () {
-      final json = {
-        'id': 'p1',
-        'product_code': 'school_management',
-        'display_name': 'School Management OS',
-        'description': 'Core administration platform',
-        'platform': 'android',
-        'status': 'ACTIVE',
-        'created_at': '2026-01-01T00:00:00Z',
-      };
-
-      final product = ProductModel.fromJson(json, assignedSchoolsCount: 12);
-      expect(product.productCode, 'school_management');
-      expect(product.displayName, 'School Management OS');
-      expect(product.status, ProductStatus.active);
-      expect(product.assignedSchoolsCount, 12);
     });
   });
 
@@ -387,10 +366,10 @@ void main() {
 
       final stats = DashboardStats.fromAggregates(
         schools: schools,
-        totalProducts: 4,
-        activeProducts: 4,
-        totalAssignments: 5,
-        activeAssignments: 4,
+        totalApps: 4,
+        activeApps: 4,
+        totalSubscriptions: 5,
+        activeSubscriptions: 4,
         expiredSubscriptions: 1,
       );
 
@@ -398,10 +377,10 @@ void main() {
       expect(stats.activeSchools, 2);
       expect(stats.inactiveSchools, 1);
       expect(stats.suspendedSchools, 1);
-      expect(stats.totalProducts, 4);
-      expect(stats.activeProducts, 4);
-      expect(stats.totalAssignments, 5);
-      expect(stats.activeAssignments, 4);
+      expect(stats.totalApps, 4);
+      expect(stats.activeApps, 4);
+      expect(stats.totalSubscriptions, 5);
+      expect(stats.activeSubscriptions, 4);
       expect(stats.expiredSubscriptions, 1);
       expect(stats.recentSchools.length, 4);
       expect(stats.recentSchools.first.name, 'School Four');

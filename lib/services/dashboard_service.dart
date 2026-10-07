@@ -12,62 +12,76 @@ class DashboardService {
   DashboardService({SchoolService? schoolService})
       : _schoolService = schoolService ?? SchoolService();
 
-  /// Computes live aggregate statistics from the Supabase schools, products, apps, and subscriptions tables
+  /// Computes live aggregate statistics from canonical Supabase tables:
+  /// schools, school_management_apps, and school_app_subscriptions.
+  /// Uses lightweight PostgREST count requests instead of loading every row into memory.
   Future<ApiResult<DashboardStats>> fetchDashboardStats() async {
-    try {
-      final schoolsResult = await _schoolService.fetchSchools();
+    final client = _client;
+    if (client == null) {
+      return ApiResult.failure('Database service is uninitialized.');
+    }
 
+    try {
+      // 1. Fetch schools for tenant status distribution and recent onboardings
+      final schoolsResult = await _schoolService.fetchSchools();
       if (schoolsResult is ApiFailure) {
-        return ApiResult.failure(schoolsResult.errorOrNull ?? 'Failed to compute stats');
+        return ApiResult.failure(schoolsResult.errorOrNull ?? 'Failed to compute school metrics');
       }
 
       final schools = schoolsResult.dataOrNull ?? [];
-      final client = _client;
 
-      int totalProducts = 4;
-      int activeProducts = 4;
-      int totalAssignments = 0;
-      int activeAssignments = 0;
+      // 2. Query aggregate counts from public.school_management_apps
+      // Using PostgREST head request with count: exact
+      int totalApps = 0;
+      int activeApps = 0;
+
+      final totalAppsRes = await client
+          .from('school_management_apps')
+          .select('id')
+          .count(CountOption.exact);
+      totalApps = totalAppsRes.count;
+
+      final activeAppsRes = await client
+          .from('school_management_apps')
+          .select('id')
+          .eq('status', 'ACTIVE')
+          .count(CountOption.exact);
+      activeApps = activeAppsRes.count;
+
+      // 3. Query aggregate counts from public.school_app_subscriptions
+      int totalSubscriptions = 0;
+      int activeSubscriptions = 0;
       int expiredSubscriptions = 0;
 
-      if (client != null) {
-        // Query products
-        try {
-          final prodRes = await client.from('products').select('id, status');
-          final prodList = prodRes as List<dynamic>;
-          if (prodList.isNotEmpty) {
-            totalProducts = prodList.length;
-            activeProducts = prodList.where((p) => (p['status']?.toString().toUpperCase() ?? '') == 'ACTIVE').length;
-          }
-        } catch (_) {}
+      final totalSubsRes = await client
+          .from('school_app_subscriptions')
+          .select('id')
+          .count(CountOption.exact);
+      totalSubscriptions = totalSubsRes.count;
 
-        // Query school_apps (assignments)
-        try {
-          final appsRes = await client.from('school_apps').select('id, status');
-          final appList = appsRes as List<dynamic>;
-          totalAssignments = appList.length;
-          activeAssignments = appList.where((a) => (a['status']?.toString().toUpperCase() ?? '') == 'ACTIVE').length;
-        } catch (_) {}
+      final activeSubsRes = await client
+          .from('school_app_subscriptions')
+          .select('id')
+          .eq('status', 'ACTIVE')
+          .count(CountOption.exact);
+      activeSubscriptions = activeSubsRes.count;
 
-        // Query subscriptions
-        try {
-          final subRes = await client.from('subscriptions').select('id, status, end_date');
-          final subList = subRes as List<dynamic>;
-          final now = DateTime.now();
-          expiredSubscriptions = subList.where((s) {
-            final statusStr = s['status']?.toString().toUpperCase() ?? '';
-            final endDate = DateTime.tryParse(s['end_date']?.toString() ?? '');
-            return statusStr == 'EXPIRED' || (endDate != null && now.isAfter(endDate));
-          }).length;
-        } catch (_) {}
-      }
+      // Check expired subscriptions (status == 'EXPIRED' or end_date in past)
+      // Using PostgREST query on canonical subscriptions table
+      final nowIso = DateTime.now().toIso8601String().split('T').first;
+      final expiredStatusRes = await client
+          .from('school_app_subscriptions')
+          .select('id')
+          .or('status.eq.EXPIRED,end_date.lt.$nowIso')
+          .count(CountOption.exact);
+      expiredSubscriptions = expiredStatusRes.count;
 
       final stats = DashboardStats.fromAggregates(
         schools: schools,
-        totalProducts: totalProducts,
-        activeProducts: activeProducts,
-        totalAssignments: totalAssignments,
-        activeAssignments: activeAssignments,
+        totalApps: totalApps,
+        activeApps: activeApps,
+        totalSubscriptions: totalSubscriptions,
+        activeSubscriptions: activeSubscriptions,
         expiredSubscriptions: expiredSubscriptions,
       );
 
@@ -78,3 +92,4 @@ class DashboardService {
     }
   }
 }
+

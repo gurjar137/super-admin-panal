@@ -2,10 +2,21 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/network/api_result.dart';
 import '../models/subscription_model.dart';
+import 'audit_log_service.dart';
 import 'supabase_service.dart';
 
 class SubscriptionService {
-  SupabaseClient? get _client => SupabaseService.instance.client;
+  final SupabaseClient? _customClient;
+  final AuditLogService _auditLogService;
+
+  SubscriptionService({
+    SupabaseClient? client,
+    AuditLogService? auditLogService,
+  })  : _customClient = client,
+        _auditLogService = auditLogService ?? AuditLogService(client: client);
+
+  SupabaseClient? get _client => _customClient ?? SupabaseService.instance.client;
+  AuditLogService get auditLogService => _auditLogService;
 
   /// Fetch subscription for a dedicated School Management App by its ID
   Future<ApiResult<SubscriptionModel?>> fetchSubscriptionBySchoolAppId(String schoolAppId) async {
@@ -125,6 +136,25 @@ class SubscriptionService {
         return ApiResult.failure('Subscription write could not be verified in Supabase.');
       }
 
+      // Persistent Audit Logging: subscription_created
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'subscription_created',
+          entityType: 'subscription',
+          entityId: created.id,
+          schoolId: created.schoolId,
+          metadata: {
+            'action_category': 'school_subscription',
+            'plan_name': created.planName,
+            'status': created.status.dbValue,
+            'start_date': created.startDate.toIso8601String(),
+            'end_date': created.endDate.toIso8601String(),
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SubscriptionService] Audit subscription_created notice: $auditErr');
+      }
+
       return ApiResult.success(created);
     } catch (e) {
       debugPrint('[SubscriptionService] createSubscription error: $e');
@@ -180,6 +210,24 @@ class SubscriptionService {
         return ApiResult.failure('Subscription update verification failed in Supabase.');
       }
 
+      // Persistent Audit Logging: subscription_updated
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'subscription_updated',
+          entityType: 'subscription',
+          entityId: subscriptionId,
+          schoolId: updated.schoolId,
+          metadata: {
+            'action_category': 'school_subscription',
+            'plan_name': updated.planName,
+            'start_date': updated.startDate.toIso8601String(),
+            'end_date': updated.endDate.toIso8601String(),
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SubscriptionService] Audit subscription_updated notice: $auditErr');
+      }
+
       return ApiResult.success(updated);
     } catch (e) {
       debugPrint('[SubscriptionService] updateSubscription error: $e');
@@ -221,6 +269,23 @@ class SubscriptionService {
 
       if (verified == null || verified['status'] != status.dbValue) {
         return ApiResult.failure('Subscription status persistence could not be verified in Supabase.');
+      }
+
+      // Persistent Audit Logging: subscription_status_changed
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'subscription_status_changed',
+          entityType: 'subscription',
+          entityId: subscriptionId,
+          schoolId: updated.schoolId,
+          metadata: {
+            'action_category': 'school_subscription',
+            'plan_name': updated.planName,
+            'new_status': updated.status.dbValue,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SubscriptionService] Audit subscription_status_changed notice: $auditErr');
       }
 
       return ApiResult.success(updated);

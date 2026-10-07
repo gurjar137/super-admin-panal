@@ -14,23 +14,35 @@ import '../../widgets/empty_state_view.dart';
 import '../../widgets/error_state_view.dart';
 import '../../widgets/status_chip.dart';
 
-// State for search and filter
+// State for search, filter, and pagination
 class SchoolFilterState {
   final String searchQuery;
   final SchoolStatus? statusFilter;
+  final int page;
+  final int pageSize;
 
   const SchoolFilterState({
     this.searchQuery = '',
     this.statusFilter,
+    this.page = 0,
+    this.pageSize = 25,
   });
 
   SchoolFilterState copyWith({
     String? searchQuery,
     SchoolStatus? Function()? statusFilter,
+    int? page,
+    int? pageSize,
   }) {
+    final newSearch = searchQuery ?? this.searchQuery;
+    final newStatus = statusFilter != null ? statusFilter() : this.statusFilter;
+    final isFilterChanged = newSearch != this.searchQuery || newStatus != this.statusFilter;
+
     return SchoolFilterState(
-      searchQuery: searchQuery ?? this.searchQuery,
-      statusFilter: statusFilter != null ? statusFilter() : this.statusFilter,
+      searchQuery: newSearch,
+      statusFilter: newStatus,
+      page: isFilterChanged && page == null ? 0 : (page ?? this.page),
+      pageSize: pageSize ?? this.pageSize,
     );
   }
 }
@@ -46,6 +58,8 @@ final schoolsListProvider = FutureProvider.autoDispose<List<SchoolModel>>((ref) 
   final result = await repo.getSchools(
     searchQuery: filter.searchQuery,
     statusFilter: filter.statusFilter,
+    page: filter.page,
+    pageSize: filter.pageSize,
   );
 
   if (result.isFailure) {
@@ -53,6 +67,18 @@ final schoolsListProvider = FutureProvider.autoDispose<List<SchoolModel>>((ref) 
   }
 
   return result.dataOrNull ?? [];
+});
+
+final schoolsCountProvider = FutureProvider.autoDispose<int>((ref) async {
+  final repo = ref.watch(schoolRepositoryProvider);
+  final filter = ref.watch(schoolFilterProvider);
+
+  final result = await repo.getSchoolsCount(
+    searchQuery: filter.searchQuery,
+    statusFilter: filter.statusFilter,
+  );
+
+  return result.dataOrNull ?? 0;
 });
 
 class SchoolsScreen extends ConsumerStatefulWidget {
@@ -157,8 +183,71 @@ class _SchoolsScreenState extends ConsumerState<SchoolsScreen> {
                 ),
               ),
             ),
+
+            // Server-side Pagination Bar
+            _buildPaginationBar(context, filter, schoolsAsync),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPaginationBar(
+    BuildContext context,
+    SchoolFilterState filter,
+    AsyncValue<List<SchoolModel>> schoolsAsync,
+  ) {
+    final countAsync = ref.watch(schoolsCountProvider);
+    final totalCount = countAsync.asData?.value;
+    final schools = schoolsAsync.asData?.value ?? [];
+    final isLoading = schoolsAsync.isLoading;
+
+    final startItem = schools.isEmpty ? 0 : filter.page * filter.pageSize + 1;
+    final endItem = schools.isEmpty ? 0 : filter.page * filter.pageSize + schools.length;
+
+    final countText = totalCount != null
+        ? 'Showing $startItem–$endItem of $totalCount schools'
+        : 'Showing $startItem–$endItem schools';
+
+    final hasNext = totalCount != null
+        ? (filter.page + 1) * filter.pageSize < totalCount
+        : schools.length == filter.pageSize;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            countText,
+            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: (!isLoading && filter.page > 0)
+                    ? () {
+                        ref.read(schoolFilterProvider.notifier).state =
+                            filter.copyWith(page: filter.page - 1);
+                      }
+                    : null,
+                icon: const Icon(Icons.chevron_left, size: 18),
+                label: const Text('Previous'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: (!isLoading && hasNext)
+                    ? () {
+                        ref.read(schoolFilterProvider.notifier).state =
+                            filter.copyWith(page: filter.page + 1);
+                      }
+                    : null,
+                icon: const Icon(Icons.chevron_right, size: 18),
+                label: const Text('Next'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/auth/app_auth_state.dart';
 import 'core/constants/app_constants.dart';
 import 'routing/app_router.dart';
 import 'services/supabase_service.dart';
@@ -11,6 +12,7 @@ Future<void> main() async {
   // Initialize Supabase client
   await SupabaseService.instance.init();
   initAuthRecoveryListener();
+  await AppAuthState.instance.initialize();
 
   runApp(
     const ProviderScope(

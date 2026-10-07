@@ -4,15 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../core/responsive/responsive_layout.dart';
+import '../schools/schools_screen.dart';
 import '../../models/school_admin_model.dart';
 import '../../models/school_app_model.dart';
 import '../../models/school_model.dart';
 import '../../models/school_provision_dto.dart';
+import '../../models/school_provisioning_models.dart';
 import '../../models/subscription_model.dart';
-import '../../repositories/school_admin_repository.dart';
-import '../../repositories/school_app_repository.dart';
-import '../../repositories/school_repository.dart';
-import '../../repositories/subscription_repository.dart';
+import '../../repositories/school_provisioning_repository.dart';
 import '../../routing/app_routes.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_text_field.dart';
@@ -61,7 +60,8 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
   SubscriptionStatus _subStatus = SubscriptionStatus.active;
   final _subNotesCtrl = TextEditingController(text: 'Initial school provisioning subscription');
 
-  // Created entities
+  // Created entities (populated atomically upon confirmation)
+  SchoolProvisioningResult? _provisioningResult;
   SchoolModel? _createdSchool;
   SchoolAppModel? _createdApp;
   SchoolAdminModel? _createdAdmin;
@@ -102,8 +102,8 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
     }
   }
 
-  // STEP 1: CREATE SCHOOL
-  Future<void> _handleCreateSchool() async {
+  // STEP 1: VALIDATE SCHOOL IDENTITY (In-memory, 0 DB mutations)
+  void _handleStep1Next() {
     setState(() => _stepError = null);
     final name = _schoolNameCtrl.text.trim();
     final code = SchoolProvisionDto.normalizeCode(_schoolCodeCtrl.text);
@@ -117,46 +117,30 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       return;
     }
 
-    setState(() => _isProcessing = true);
-    final repo = ref.read(schoolRepositoryProvider);
-    final result = await repo.createSchool(
-      name: name,
-      schoolCode: code,
-      address: _schoolAddressCtrl.text.trim(),
-      phone: _schoolPhoneCtrl.text.trim(),
-      email: _schoolEmailCtrl.text.trim().toLowerCase(),
-      logoUrl: _schoolLogoCtrl.text.trim(),
-      status: _schoolStatus,
-    );
-
-    if (!mounted) return;
-    setState(() => _isProcessing = false);
-
-    if (result.isSuccess && result.dataOrNull != null) {
-      final school = result.dataOrNull!;
-      setState(() {
-        _createdSchool = school;
-        _currentStep = 1;
-        // Pre-fill Step 2 values based on created school
-        _appNameCtrl.text = '${school.name} App';
-        _appIdentifierCtrl.text = '${school.schoolCode.replaceAll('-', '_')}_APP'.toUpperCase();
-        final safePkgCode = school.schoolCode.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '_');
-        _packageNameCtrl.text = 'com.school.app.$safePkgCode';
-      });
-    } else {
-      setState(() => _stepError = result.errorOrNull ?? 'Failed to create school');
+    // Auto-fill Step 2 values if currently empty or matching default
+    if (_appNameCtrl.text.trim().isEmpty) {
+      _appNameCtrl.text = '$name App';
     }
+    if (_appIdentifierCtrl.text.trim().isEmpty) {
+      _appIdentifierCtrl.text = '${code.replaceAll('-', '_')}_APP'.toUpperCase();
+    }
+    if (_packageNameCtrl.text.trim().isEmpty) {
+      final safePkgCode = code.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '_');
+      _packageNameCtrl.text = 'com.school.app.$safePkgCode';
+    }
+
+    setState(() {
+      _currentStep = 1;
+    });
   }
 
-  // STEP 2: CONFIGURE APP
-  Future<void> _handleConfigureApp() async {
-    if (_createdSchool == null) return;
+  // STEP 2: VALIDATE APP CONFIGURATION (In-memory, 0 DB mutations)
+  void _handleStep2Next() {
     setState(() => _stepError = null);
 
     final appName = _appNameCtrl.text.trim();
     final appIdentifier = _appIdentifierCtrl.text.trim().toUpperCase();
     final packageName = _packageNameCtrl.text.trim().toLowerCase();
-    final version = _appVersionCtrl.text.trim().isNotEmpty ? _appVersionCtrl.text.trim() : '1.0.0';
 
     if (appName.isEmpty) {
       setState(() => _stepError = 'App Name is required.');
@@ -170,40 +154,22 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       setState(() => _stepError = 'Android Package Name is required.');
       return;
     }
-
-    setState(() => _isProcessing = true);
-    final appRepo = ref.read(schoolAppRepositoryProvider);
-    final result = await appRepo.createSchoolApp(
-      schoolId: _createdSchool!.id,
-      appName: appName,
-      appIdentifier: appIdentifier,
-      packageName: packageName,
-      currentVersion: version,
-      playStoreUrl: _playStoreUrlCtrl.text.trim(),
-      status: _appStatus,
-    );
-
-    if (!mounted) return;
-    setState(() => _isProcessing = false);
-
-    if (result.isSuccess && result.dataOrNull != null) {
-      setState(() {
-        _createdApp = result.dataOrNull!;
-        _currentStep = 2;
-      });
-    } else {
-      setState(() => _stepError = result.errorOrNull ?? 'Failed to register school management app');
+    if (!RegExp(r'^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$').hasMatch(packageName)) {
+      setState(() => _stepError = 'Invalid Android Package Name. Must follow reverse-domain format (e.g. com.school.app).');
+      return;
     }
+
+    setState(() {
+      _currentStep = 2;
+    });
   }
 
-  // STEP 3: CREATE SCHOOL ADMIN
-  Future<void> _handleCreateAdmin() async {
-    if (_createdSchool == null) return;
+  // STEP 3: VALIDATE ADMIN CREDENTIALS (In-memory, 0 DB mutations)
+  void _handleStep3Next() {
     setState(() => _stepError = null);
 
     final name = _adminNameCtrl.text.trim();
     final email = _adminEmailCtrl.text.trim().toLowerCase();
-    final phone = _adminPhoneCtrl.text.trim();
     final password = _adminPasswordCtrl.text;
 
     if (name.isEmpty) {
@@ -219,35 +185,13 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       return;
     }
 
-    setState(() => _isProcessing = true);
-    final adminRepo = ref.read(schoolAdminRepositoryProvider);
-    final result = await adminRepo.createSchoolAdmin(
-      schoolId: _createdSchool!.id,
-      fullName: name,
-      email: email,
-      phone: phone.isNotEmpty ? phone : null,
-      password: password,
-    );
-
-    // CRITICAL SECURITY: Immediately wipe the plaintext password from memory
-    _adminPasswordCtrl.clear();
-
-    if (!mounted) return;
-    setState(() => _isProcessing = false);
-
-    if (result.isSuccess && result.dataOrNull != null) {
-      setState(() {
-        _createdAdmin = result.dataOrNull!;
-        _currentStep = 3;
-      });
-    } else {
-      setState(() => _stepError = result.errorOrNull ?? 'Failed to create school administrator');
-    }
+    setState(() {
+      _currentStep = 3;
+    });
   }
 
-  // STEP 4: ACTIVATE SUBSCRIPTION
-  Future<void> _handleActivateSubscription() async {
-    if (_createdApp == null) return;
+  // STEP 4: VALIDATE SUBSCRIPTION (In-memory, 0 DB mutations)
+  void _handleStep4Next() {
     setState(() => _stepError = null);
 
     final plan = _planNameCtrl.text.trim();
@@ -260,27 +204,74 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       return;
     }
 
-    setState(() => _isProcessing = true);
-    final subRepo = ref.read(subscriptionRepositoryProvider);
-    final result = await subRepo.createSubscription(
-      schoolAppId: _createdApp!.id,
-      planName: plan,
+    setState(() {
+      _currentStep = 4;
+    });
+  }
+
+  // STEP 5: ATOMIC PROVISIONING EXECUTION
+  Future<void> _handleExecuteProvisioning() async {
+    setState(() {
+      _stepError = null;
+      _isProcessing = true;
+    });
+
+    final code = SchoolProvisionDto.normalizeCode(_schoolCodeCtrl.text);
+    final idempotencyKey = 'prov_${code}_${DateTime.now().millisecondsSinceEpoch}';
+
+    final request = SchoolProvisioningRequest(
+      schoolName: _schoolNameCtrl.text.trim(),
+      schoolCode: code,
+      address: _schoolAddressCtrl.text.trim().isNotEmpty ? _schoolAddressCtrl.text.trim() : null,
+      phone: _schoolPhoneCtrl.text.trim().isNotEmpty ? _schoolPhoneCtrl.text.trim() : null,
+      email: _schoolEmailCtrl.text.trim().isNotEmpty ? _schoolEmailCtrl.text.trim().toLowerCase() : null,
+      logoUrl: _schoolLogoCtrl.text.trim().isNotEmpty ? _schoolLogoCtrl.text.trim() : null,
+      schoolStatus: _schoolStatus,
+      appName: _appNameCtrl.text.trim(),
+      packageBundleId: _packageNameCtrl.text.trim().toLowerCase(),
+      appIdentifier: _appIdentifierCtrl.text.trim().toUpperCase(),
+      currentVersion: _appVersionCtrl.text.trim().isNotEmpty ? _appVersionCtrl.text.trim() : '1.0.0',
+      playStoreUrl: _playStoreUrlCtrl.text.trim().isNotEmpty ? _playStoreUrlCtrl.text.trim() : null,
+      appStatus: _appStatus,
+      adminFullName: _adminNameCtrl.text.trim(),
+      adminEmail: _adminEmailCtrl.text.trim().toLowerCase(),
+      adminPhone: _adminPhoneCtrl.text.trim().isNotEmpty ? _adminPhoneCtrl.text.trim() : null,
+      adminPassword: _adminPasswordCtrl.text,
+      planName: _planNameCtrl.text.trim(),
       startDate: _startDate,
       endDate: _endDate,
-      status: _subStatus,
-      notes: _subNotesCtrl.text.trim(),
+      subscriptionStatus: _subStatus,
+      subscriptionNotes: _subNotesCtrl.text.trim().isNotEmpty ? _subNotesCtrl.text.trim() : null,
+      ratePerStudent: 20.00,
+      currency: 'INR',
+      billingCycle: 'MONTHLY',
+      idempotencyKey: idempotencyKey,
     );
+
+    final repo = ref.read(schoolProvisioningRepositoryProvider);
+    final result = await repo.provisionSchool(request);
+
+    // CRITICAL SECURITY GUARANTEE: Wipe plaintext password from memory immediately
+    _adminPasswordCtrl.clear();
 
     if (!mounted) return;
     setState(() => _isProcessing = false);
 
     if (result.isSuccess && result.dataOrNull != null) {
+      final res = result.dataOrNull!;
       setState(() {
-        _createdSubscription = result.dataOrNull!;
-        _currentStep = 4;
+        _provisioningResult = res;
+        _createdSchool = res.school;
+        _createdApp = res.app;
+        _createdAdmin = res.admin;
+        _createdSubscription = res.subscription;
       });
+      // Invalidate school list cache so newly provisioned school appears immediately
+      ref.invalidate(schoolsListProvider);
     } else {
-      setState(() => _stepError = result.errorOrNull ?? 'Failed to activate subscription');
+      setState(() {
+        _stepError = result.errorOrNull ?? 'Failed to provision school.';
+      });
     }
   }
 
@@ -288,6 +279,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
     setState(() {
       _currentStep = 0;
       _stepError = null;
+      _provisioningResult = null;
       _createdSchool = null;
       _createdApp = null;
       _createdAdmin = null;
@@ -359,7 +351,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       '2. Dedicated App',
       '3. Administrator',
       '4. Subscription',
-      '5. Summary',
+      '5. Provision',
     ];
 
     return Container(
@@ -369,69 +361,73 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.borderLight),
       ),
-      child: Row(
-        children: List.generate(steps.length * 2 - 1, (index) {
-          if (index.isOdd) {
-            final stepBefore = index ~/ 2;
-            final isCompleted = _currentStep > stepBefore;
-            return Expanded(
-              child: Container(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(steps.length * 2 - 1, (index) {
+            if (index.isOdd) {
+              final stepBefore = index ~/ 2;
+              final isCompleted = _currentStep > stepBefore;
+              return Container(
+                width: 24,
                 height: 2,
+                margin: const EdgeInsets.symmetric(horizontal: 6),
                 color: isCompleted ? AppColors.primary : AppColors.borderLight,
-              ),
-            );
-          }
-          final stepIndex = index ~/ 2;
-          final isActive = _currentStep == stepIndex;
-          final isDone = _currentStep > stepIndex;
+              );
+            }
+            final stepIndex = index ~/ 2;
+            final isActive = _currentStep == stepIndex;
+            final isDone = _currentStep > stepIndex || (_currentStep == 4 && _provisioningResult != null);
 
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isDone
-                      ? AppColors.primary
-                      : isActive
-                          ? AppColors.primary.withValues(alpha: 0.12)
-                          : AppColors.surfaceLight,
-                  border: Border.all(
-                    color: isDone || isActive ? AppColors.primary : AppColors.borderLight,
-                    width: 2,
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isDone
+                        ? AppColors.primary
+                        : isActive
+                            ? AppColors.primary.withValues(alpha: 0.12)
+                            : AppColors.surfaceLight,
+                    border: Border.all(
+                      color: isDone || isActive ? AppColors.primary : AppColors.borderLight,
+                      width: 2,
+                    ),
+                  ),
+                  child: Center(
+                    child: isDone
+                        ? const Icon(Icons.check, size: 16, color: Colors.white)
+                        : Text(
+                            '${stepIndex + 1}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: isActive ? AppColors.primary : AppColors.textSecondary,
+                            ),
+                          ),
                   ),
                 ),
-                child: Center(
-                  child: isDone
-                      ? const Icon(Icons.check, size: 16, color: Colors.white)
-                      : Text(
-                          '${stepIndex + 1}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: isActive ? AppColors.primary : AppColors.textSecondary,
-                          ),
-                        ),
+                const SizedBox(width: 8),
+                Text(
+                  steps[stepIndex],
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                    color: isActive
+                        ? AppColors.textPrimary
+                        : isDone
+                            ? AppColors.primary
+                            : AppColors.textSecondary,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                steps[stepIndex],
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  color: isActive
-                      ? AppColors.textPrimary
-                      : isDone
-                          ? AppColors.primary
-                          : AppColors.textSecondary,
-                ),
-              ),
-            ],
-          );
-        }),
+              ],
+            );
+          }),
+        ),
       ),
     );
   }
@@ -471,17 +467,17 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
         return _buildStep4Subscription();
       case 4:
       default:
-        return _buildStep5Summary();
+        return _provisioningResult != null ? _buildStep5SuccessSummary() : _buildStep5ReviewAndConfirm();
     }
   }
 
   // -------------------------------------------------------------
-  // STEP 1: CREATE SCHOOL
+  // STEP 1: SCHOOL IDENTITY & REGISTRATION
   // -------------------------------------------------------------
   Widget _buildStep1School() {
     return _buildSectionCard(
       title: 'Step 1: School Identity & Registration',
-      subtitle: 'Enter core school identity. The database UUID will be generated automatically.',
+      subtitle: 'Enter core school identity. Records will be validated and provisioned atomically in Step 5.',
       icon: Icons.school_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -548,9 +544,9 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
           ),
           const SizedBox(height: 24),
           _buildActionButton(
-            label: 'Create School & Continue',
+            label: 'Continue to Dedicated App',
             icon: Icons.arrow_forward_rounded,
-            onPressed: _isProcessing ? null : _handleCreateSchool,
+            onPressed: _handleStep1Next,
           ),
         ],
       ),
@@ -563,16 +559,13 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
   Widget _buildStep2App() {
     return _buildSectionCard(
       title: 'Step 2: Dedicated School Management App',
-      subtitle: 'Bind a dedicated mobile client configuration to the newly created school UUID.',
+      subtitle: 'Bind a dedicated mobile client configuration to the school tenant.',
       icon: Icons.mobile_friendly_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildCreatedEntityBanner(
-            title: 'Created School Tenant',
-            name: _createdSchool!.name,
-            code: _createdSchool!.schoolCode,
-            id: _createdSchool!.id,
+          _buildPendingStepBadge(
+            'School: ${_schoolNameCtrl.text.trim()} (${_schoolCodeCtrl.text.trim()})',
           ),
           const SizedBox(height: 20),
           AppTextField(
@@ -625,10 +618,25 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
             hint: 'https://play.google.com/store/apps/details?id=...',
           ),
           const SizedBox(height: 24),
-          _buildActionButton(
-            label: 'Register App & Continue',
-            icon: Icons.arrow_forward_rounded,
-            onPressed: _isProcessing ? null : _handleConfigureApp,
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() => _currentStep = 0),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  label: const Text('Back to School Identity'),
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildActionButton(
+                  label: 'Continue to Administrator',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: _handleStep2Next,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -636,21 +644,18 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
   }
 
   // -------------------------------------------------------------
-  // STEP 3: CREATE SCHOOL ADMIN
+  // STEP 3: INITIAL SCHOOL ADMINISTRATOR
   // -------------------------------------------------------------
   Widget _buildStep3Admin() {
     return _buildSectionCard(
       title: 'Step 3: Initial School Administrator',
-      subtitle: 'Create the primary School Admin. The initial password is used transiently for signup.',
+      subtitle: 'Configure the primary School Admin. The temporary password is used for isolated Auth signup upon provisioning.',
       icon: Icons.person_add_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildCreatedEntityBanner(
-            title: 'Created School & App',
-            name: '${_createdSchool!.name} (${_createdApp!.appName})',
-            code: _createdApp!.appIdentifier ?? '',
-            id: _createdSchool!.id,
+          _buildPendingStepBadge(
+            'School: ${_schoolNameCtrl.text.trim()} • App: ${_appNameCtrl.text.trim()}',
           ),
           const SizedBox(height: 16),
           Container(
@@ -667,7 +672,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Security Guarantee: The initial password is used transiently to create the Supabase Auth user. It is NEVER saved to database tables, profiles, storage, or logs. The administrator will be required to change this password upon first login.',
+                    'Security Guarantee: The initial password is used transiently to create the Supabase Auth user. It is NEVER saved to database tables, profiles, storage, or logs. The password field is wiped from memory immediately upon provisioning.',
                     style: TextStyle(fontSize: 12, color: AppColors.textPrimary, height: 1.4),
                   ),
                 ),
@@ -719,10 +724,25 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
             ),
           ),
           const SizedBox(height: 24),
-          _buildActionButton(
-            label: 'Create Admin & Continue',
-            icon: Icons.arrow_forward_rounded,
-            onPressed: _isProcessing ? null : _handleCreateAdmin,
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() => _currentStep = 1),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  label: const Text('Back to Dedicated App'),
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildActionButton(
+                  label: 'Continue to Subscription',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: _handleStep3Next,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -730,23 +750,20 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
   }
 
   // -------------------------------------------------------------
-  // STEP 4: ACTIVATE SUBSCRIPTION
+  // STEP 4: ACTIVATE APPLICATION LICENSE
   // -------------------------------------------------------------
   Widget _buildStep4Subscription() {
     final dateFormat = DateFormat('yyyy-MM-dd');
 
     return _buildSectionCard(
       title: 'Step 4: Activate Application License',
-      subtitle: 'Create the authoritative subscription record linked to the dedicated School Management App.',
+      subtitle: 'Configure the authoritative subscription record linked to the dedicated School Management App.',
       icon: Icons.card_membership_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildCreatedEntityBanner(
-            title: 'School, App & Admin Configured',
-            name: '${_createdSchool!.name} • Admin: ${_createdAdmin!.fullName}',
-            code: _createdApp!.appIdentifier ?? '',
-            id: _createdApp!.id,
+          _buildPendingStepBadge(
+            'School: ${_schoolNameCtrl.text.trim()} • Admin: ${_adminNameCtrl.text.trim()}',
           ),
           const SizedBox(height: 20),
           AppTextField(
@@ -814,10 +831,25 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
             hint: 'Initial provisioning license',
           ),
           const SizedBox(height: 24),
-          _buildActionButton(
-            label: 'Activate Subscription & Complete',
-            icon: Icons.check_circle_rounded,
-            onPressed: _isProcessing ? null : _handleActivateSubscription,
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() => _currentStep = 2),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  label: const Text('Back to Administrator'),
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildActionButton(
+                  label: 'Continue to Review & Confirm',
+                  icon: Icons.arrow_forward_rounded,
+                  onPressed: _handleStep4Next,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -825,9 +857,153 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
   }
 
   // -------------------------------------------------------------
-  // STEP 5: FINAL PROVISIONING SUMMARY
+  // STEP 5A: REVIEW & CONFIRM PROVISIONING (PRE-EXECUTION)
   // -------------------------------------------------------------
-  Widget _buildStep5Summary() {
+  Widget _buildStep5ReviewAndConfirm() {
+    final dateFormat = DateFormat('yyyy-MM-dd');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Atomicity Guarantee Banner
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.lock_clock_rounded, size: 28, color: AppColors.primary),
+              SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Single Atomic Provisioning Submission',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'All 5 operational records (School, App, Admin Profile, Subscription, and Billing Settings) will be created inside a single transactional operation with automatic rollback protection.',
+                      style: TextStyle(fontSize: 12.5, color: AppColors.textSecondary, height: 1.3),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // Summary Cards with Edit shortcuts
+        _buildReviewSectionCard(
+          title: '1. School Entity (public.schools)',
+          icon: Icons.apartment_rounded,
+          onEdit: () => setState(() => _currentStep = 0),
+          items: [
+            {'label': 'School Name', 'value': _schoolNameCtrl.text.trim()},
+            {'label': 'School Code', 'value': SchoolProvisionDto.normalizeCode(_schoolCodeCtrl.text)},
+            {'label': 'Initial Status', 'value': _schoolStatus.name.toUpperCase()},
+            if (_schoolEmailCtrl.text.trim().isNotEmpty)
+              {'label': 'Official Email', 'value': _schoolEmailCtrl.text.trim()},
+            if (_schoolPhoneCtrl.text.trim().isNotEmpty)
+              {'label': 'Official Phone', 'value': _schoolPhoneCtrl.text.trim()},
+            if (_schoolAddressCtrl.text.trim().isNotEmpty)
+              {'label': 'Campus Address', 'value': _schoolAddressCtrl.text.trim()},
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildReviewSectionCard(
+          title: '2. Dedicated Mobile App (public.school_management_apps)',
+          icon: Icons.smartphone_rounded,
+          onEdit: () => setState(() => _currentStep = 1),
+          items: [
+            {'label': 'App Name', 'value': _appNameCtrl.text.trim()},
+            {'label': 'APP_IDENTIFIER', 'value': _appIdentifierCtrl.text.trim().toUpperCase()},
+            {'label': 'Android Package', 'value': _packageNameCtrl.text.trim().toLowerCase()},
+            {'label': 'Current Version', 'value': _appVersionCtrl.text.trim()},
+            {'label': 'Status', 'value': _appStatus.name.toUpperCase()},
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildReviewSectionCard(
+          title: '3. School Administrator (public.profiles & Auth)',
+          icon: Icons.person_rounded,
+          onEdit: () => setState(() => _currentStep = 2),
+          items: [
+            {'label': 'Admin Full Name', 'value': _adminNameCtrl.text.trim()},
+            {'label': 'Admin Email', 'value': _adminEmailCtrl.text.trim().toLowerCase()},
+            if (_adminPhoneCtrl.text.trim().isNotEmpty)
+              {'label': 'Phone', 'value': _adminPhoneCtrl.text.trim()},
+            {'label': 'Assigned Role', 'value': 'school_admin'},
+            {'label': 'Password Security', 'value': 'Temporary password will be wiped after signup'},
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildReviewSectionCard(
+          title: '4. License & Subscription (public.school_app_subscriptions)',
+          icon: Icons.card_membership_rounded,
+          onEdit: () => setState(() => _currentStep = 3),
+          items: [
+            {'label': 'Plan Name', 'value': _planNameCtrl.text.trim()},
+            {'label': 'Validity Window', 'value': '${dateFormat.format(_startDate)} to ${dateFormat.format(_endDate)}'},
+            {'label': 'Initial Status', 'value': _subStatus.name.toUpperCase()},
+            if (_subNotesCtrl.text.trim().isNotEmpty)
+              {'label': 'Notes', 'value': _subNotesCtrl.text.trim()},
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildReviewSectionCard(
+          title: '5. Per-Student Billing Settings (public.school_billing_settings)',
+          icon: Icons.receipt_long_rounded,
+          onEdit: null,
+          items: [
+            {'label': 'Per-Student Rate', 'value': '₹20.00 / student'},
+            {'label': 'Billing Currency', 'value': 'INR'},
+            {'label': 'Billing Cycle', 'value': 'MONTHLY'},
+            {'label': 'Active Status', 'value': 'ENABLED'},
+          ],
+        ),
+        const SizedBox(height: 28),
+
+        // Action Buttons
+        Row(
+          children: [
+            Expanded(
+              flex: 1,
+              child: OutlinedButton.icon(
+                onPressed: _isProcessing ? null : () => setState(() => _currentStep = 3),
+                icon: const Icon(Icons.arrow_back_rounded),
+                label: const Text('Back to Edit'),
+                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              flex: 2,
+              child: _buildActionButton(
+                label: 'Confirm & Provision School',
+                icon: Icons.rocket_launch_rounded,
+                onPressed: _isProcessing ? null : _handleExecuteProvisioning,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // -------------------------------------------------------------
+  // STEP 5B: FINAL PROVISIONING SUCCESS SUMMARY (POST-EXECUTION)
+  // -------------------------------------------------------------
+  Widget _buildStep5SuccessSummary() {
     final dateFormat = DateFormat('yyyy-MM-dd');
 
     return Column(
@@ -852,17 +1028,19 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
                 child: const Icon(Icons.verified_rounded, size: 32, color: AppColors.success),
               ),
               const SizedBox(width: 16),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'School Provisioning Completed Successfully',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                      _provisioningResult?.isIdempotentReplay == true
+                          ? 'School Already Provisioned (Idempotent Match)'
+                          : 'School Provisioning Completed Successfully',
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
                     ),
-                    SizedBox(height: 4),
-                    Text(
-                      'All 4 architectural layers have been provisioned and bound in Supabase.',
+                    const SizedBox(height: 4),
+                    const Text(
+                      'All architectural layers have been atomically provisioned and bound in Supabase.',
                       style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
                     ),
                   ],
@@ -887,7 +1065,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Initial password was set successfully. It will not be stored or displayed again. The administrator must set a permanent password upon first login.',
+                  'Initial password was used for Auth account creation and wiped immediately. The administrator must set a permanent password upon first login.',
                   style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF15803D)),
                 ),
               ),
@@ -949,6 +1127,18 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
             },
           ],
         ),
+        const SizedBox(height: 16),
+
+        _buildSummaryCard(
+          title: '5. Default Billing Settings (public.school_billing_settings)',
+          icon: Icons.receipt_long_rounded,
+          items: [
+            {'label': 'Rate Per Student', 'value': '₹20.00'},
+            {'label': 'Currency', 'value': 'INR'},
+            {'label': 'Billing Cycle', 'value': 'MONTHLY'},
+            {'label': 'Billing Setting ID', 'value': _provisioningResult?.billingSettingsId ?? 'Auto-Created', 'isUuid': true},
+          ],
+        ),
         const SizedBox(height: 28),
 
         // Navigation Actions
@@ -984,6 +1174,97 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildPendingStepBadge(String text) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.primarySubtle,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline_rounded, color: AppColors.primary, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReviewSectionCard({
+    required String title,
+    required IconData icon,
+    required List<Map<String, String>> items,
+    VoidCallback? onEdit,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                ),
+              ),
+              if (onEdit != null)
+                TextButton.icon(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 14),
+                  label: const Text('Edit', style: TextStyle(fontSize: 12)),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+            ],
+          ),
+          const Divider(height: 16),
+          ...items.map((it) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 160,
+                    child: Text(
+                      it['label']!,
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      it['value']!,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 
@@ -1149,60 +1430,6 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
           padding: const EdgeInsets.symmetric(vertical: 16),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
-      ),
-    );
-  }
-
-  Widget _buildCreatedEntityBanner({
-    required String title,
-    required String name,
-    required String code,
-    required String id,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.successSubtle,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.successText,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '$name • $code',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                Text(
-                  'UUID: $id',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

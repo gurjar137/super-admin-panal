@@ -6,11 +6,6 @@ class AppConstants {
   // Session & Storage keys
   static const String sessionKey = 'super_admin_session';
 
-  /// TEMPORARY DEVELOPMENT ONLY:
-  /// When true, bypasses the initial Super Admin login screen check.
-  /// DISABLED for production Supabase authentication.
-  static const bool isDevAuthBypassEnabled = false;
-
   // Standard paddings
   static const double paddingXS = 4.0;
   static const double paddingS = 8.0;

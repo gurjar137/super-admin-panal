@@ -196,3 +196,131 @@ CREATE TRIGGER trg_school_invoices_updated_at
     BEFORE UPDATE ON public.school_invoices
     FOR EACH ROW
     EXECUTE FUNCTION public.handle_updated_at();
+
+-- 10. Atomic Payment Recording Procedure (Financial Integrity)
+-- Guarantees atomic insertion into public.invoice_payments and update to public.school_invoices
+-- Prevents orphaned payments and phantom PAID invoices.
+CREATE OR REPLACE FUNCTION public.record_invoice_payment_atomic(
+    p_invoice_id UUID,
+    p_amount NUMERIC,
+    p_payment_method TEXT,
+    p_payment_reference TEXT DEFAULT NULL,
+    p_notes TEXT DEFAULT NULL,
+    p_payment_date TIMESTAMPTZ DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+    v_caller_role TEXT;
+    v_caller_status TEXT;
+    v_caller_email TEXT;
+    v_invoice RECORD;
+    v_payment_id UUID;
+    v_effective_date TIMESTAMPTZ;
+    v_result JSONB;
+BEGIN
+    -- 1. Authoritative caller verification from server-side public.profiles
+    SELECT role, status, email INTO v_caller_role, v_caller_status, v_caller_email
+    FROM public.profiles
+    WHERE auth_user_id = auth.uid()
+    LIMIT 1;
+
+    IF v_caller_role IS NULL OR v_caller_role NOT IN ('super_admin', 'owner') OR LOWER(v_caller_status) != 'active' THEN
+        RAISE EXCEPTION 'Unauthorized: Caller is not an active Super Admin or Owner';
+    END IF;
+
+    -- 2. Lock invoice row to prevent race conditions & double payments
+    SELECT * INTO v_invoice
+    FROM public.school_invoices
+    WHERE id = p_invoice_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invoice not found: %', p_invoice_id;
+    END IF;
+
+    IF v_invoice.status = 'PAID' THEN
+        RAISE EXCEPTION 'Invoice is already paid';
+    END IF;
+
+    IF v_invoice.status = 'CANCELLED' THEN
+        RAISE EXCEPTION 'Cannot record payment for a cancelled invoice';
+    END IF;
+
+    -- 3. Validate payment amounts & inputs
+    IF p_amount <= 0 THEN
+        RAISE EXCEPTION 'Payment amount must be greater than zero';
+    END IF;
+
+    IF ABS(p_amount - v_invoice.total_amount) > 0.01 THEN
+        RAISE EXCEPTION 'Full payment only: Payment amount (₹%) must match invoice total (₹%)', p_amount, v_invoice.total_amount;
+    END IF;
+
+    IF p_payment_method NOT IN ('CASH', 'BANK_TRANSFER', 'UPI', 'OTHER') THEN
+        RAISE EXCEPTION 'Invalid payment method: %', p_payment_method;
+    END IF;
+
+    v_effective_date := COALESCE(p_payment_date, clock_timestamp());
+
+    -- 4. Atomic step 1: Insert payment ledger row
+    INSERT INTO public.invoice_payments (
+        invoice_id,
+        amount,
+        payment_date,
+        payment_method,
+        payment_reference,
+        notes,
+        status,
+        created_by
+    ) VALUES (
+        p_invoice_id,
+        p_amount,
+        v_effective_date,
+        p_payment_method,
+        NULLIF(TRIM(p_payment_reference), ''),
+        NULLIF(TRIM(p_notes), ''),
+        'COMPLETED',
+        COALESCE(v_caller_email, auth.uid()::text)
+    ) RETURNING id INTO v_payment_id;
+
+    -- 5. Atomic step 2: Update invoice status to PAID
+    UPDATE public.school_invoices
+    SET
+        status = 'PAID',
+        paid_at = v_effective_date,
+        paid_by = COALESCE(v_caller_email, auth.uid()::text),
+        updated_at = clock_timestamp()
+    WHERE id = p_invoice_id;
+
+    -- 6. Query and return updated invoice representation
+    SELECT to_jsonb(inv) INTO v_result
+    FROM public.school_invoices inv
+    WHERE inv.id = p_invoice_id;
+
+    RETURN v_result;
+END;
+$$;
+
+-- Explicitly revoke all privileges from PUBLIC (anon / unauthenticated)
+REVOKE ALL ON FUNCTION public.record_invoice_payment_atomic(
+    UUID,
+    NUMERIC,
+    TEXT,
+    TEXT,
+    TEXT,
+    TIMESTAMPTZ
+) FROM PUBLIC;
+
+-- Grant execution only to authenticated callers (function internally enforces active super_admin/owner role)
+GRANT EXECUTE ON FUNCTION public.record_invoice_payment_atomic(
+    UUID,
+    NUMERIC,
+    TEXT,
+    TEXT,
+    TEXT,
+    TIMESTAMPTZ
+) TO authenticated;
+

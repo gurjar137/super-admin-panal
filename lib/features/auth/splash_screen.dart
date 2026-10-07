@@ -30,10 +30,26 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
 
     if (!mounted) return;
 
+    final redirectParam = GoRouterState.of(context).uri.queryParameters['redirect'];
+
     if (superAdmin != null) {
-      context.go(AppRoutes.dashboard);
+      if (redirectParam != null &&
+          redirectParam.isNotEmpty &&
+          redirectParam != AppRoutes.splash &&
+          redirectParam != AppRoutes.login) {
+        context.go(redirectParam);
+      } else {
+        context.go(AppRoutes.dashboard);
+      }
     } else {
-      context.go(AppRoutes.login);
+      if (redirectParam != null &&
+          redirectParam.isNotEmpty &&
+          redirectParam != AppRoutes.splash &&
+          redirectParam != AppRoutes.login) {
+        context.go('${AppRoutes.login}?redirect=${Uri.encodeComponent(redirectParam)}');
+      } else {
+        context.go(AppRoutes.login);
+      }
     }
   }
 

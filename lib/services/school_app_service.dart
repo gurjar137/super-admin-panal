@@ -2,10 +2,21 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/network/api_result.dart';
 import '../models/school_app_model.dart';
+import 'audit_log_service.dart';
 import 'supabase_service.dart';
 
 class SchoolAppService {
-  SupabaseClient? get _client => SupabaseService.instance.client;
+  final SupabaseClient? _customClient;
+  final AuditLogService _auditLogService;
+
+  SchoolAppService({
+    SupabaseClient? client,
+    AuditLogService? auditLogService,
+  })  : _customClient = client,
+        _auditLogService = auditLogService ?? AuditLogService(client: client);
+
+  SupabaseClient? get _client => _customClient ?? SupabaseService.instance.client;
+  AuditLogService get auditLogService => _auditLogService;
 
   static const String _appColumns =
       'id, school_id, app_name, package_name, app_identifier, current_version, play_store_url, status, notes, created_at, updated_at, schools(name)';
@@ -157,7 +168,28 @@ class SchoolAppService {
           .select(_appColumns)
           .single();
 
-      return ApiResult.success(SchoolAppModel.fromJson(inserted));
+      final createdApp = SchoolAppModel.fromJson(inserted);
+
+      // Persistent Audit Logging: app_created
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'app_created',
+          entityType: 'app',
+          entityId: createdApp.id,
+          schoolId: schoolId,
+          metadata: {
+            'action_category': 'school_app',
+            'app_name': createdApp.appName,
+            'package_name': createdApp.packageName,
+            'app_identifier': createdApp.appIdentifier,
+            'status': createdApp.status.dbValue,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolAppService] Audit app_created notice: $auditErr');
+      }
+
+      return ApiResult.success(createdApp);
     } catch (e) {
       debugPrint('[SchoolAppService] createSchoolApp error: $e');
       return ApiResult.failure(_formatErrorMessage(e), e);
@@ -234,7 +266,28 @@ class SchoolAppService {
           .select(_appColumns)
           .single();
 
-      return ApiResult.success(SchoolAppModel.fromJson(updated));
+      final updatedApp = SchoolAppModel.fromJson(updated);
+
+      // Persistent Audit Logging: app_updated
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'app_updated',
+          entityType: 'app',
+          entityId: appId,
+          schoolId: updatedApp.schoolId,
+          metadata: {
+            'action_category': 'school_app',
+            'app_name': updatedApp.appName,
+            'package_name': updatedApp.packageName,
+            'app_identifier': updatedApp.appIdentifier,
+            'version': updatedApp.currentVersion,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolAppService] Audit app_updated notice: $auditErr');
+      }
+
+      return ApiResult.success(updatedApp);
     } catch (e) {
       debugPrint('[SchoolAppService] updateAppMetadata error: $e');
       return ApiResult.failure(_formatErrorMessage(e), e);
@@ -262,7 +315,27 @@ class SchoolAppService {
           .select(_appColumns)
           .single();
 
-      return ApiResult.success(SchoolAppModel.fromJson(updated));
+      final updatedApp = SchoolAppModel.fromJson(updated);
+
+      // Persistent Audit Logging: app_status_changed
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'app_status_changed',
+          entityType: 'app',
+          entityId: appId,
+          schoolId: updatedApp.schoolId,
+          metadata: {
+            'action_category': 'school_app',
+            'app_name': updatedApp.appName,
+            'new_status': updatedApp.status.dbValue,
+            'is_active': isActive,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolAppService] Audit app_status_changed notice: $auditErr');
+      }
+
+      return ApiResult.success(updatedApp);
     } catch (e) {
       debugPrint('[SchoolAppService] toggleAppAccess error: $e');
       return ApiResult.failure(_formatErrorMessage(e), e);

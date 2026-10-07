@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../core/auth/app_auth_state.dart';
 import '../core/auth/recovery_session_state.dart';
 import '../core/config/supabase_config.dart';
-import '../features/applications/applications_screen.dart';
-import '../features/assignments/assignments_screen.dart';
+import '../features/audit_logs/audit_logs_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/splash_screen.dart';
 import '../features/auth/update_password_screen.dart';
@@ -16,15 +16,101 @@ import '../features/profile/profile_screen.dart';
 import '../features/provisioning/school_provisioning_screen.dart';
 import '../features/school_apps/app_details_screen.dart';
 import '../features/schools/schools_screen.dart';
-import '../features/subscriptions/subscriptions_screen.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_shell.dart';
 import 'app_routes.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
+/// Global Authentication Route Guard.
+/// Intercepts every route transition before the destination screen can render.
+///
+/// Rules:
+/// 1. Password recovery (/update-password) is always accessible for recovery sessions.
+/// 2. If session initialization has not completed, hold on /splash (preserving deep links).
+/// 3. If unauthenticated, redirect all protected routes immediately to /login with target preserved.
+/// 4. If authenticated, prevent rendering /login or /splash and redirect to intended path or /dashboard.
+/// 5. Protected routes NEVER render without a valid, active Super Admin profile.
+String? authRouteGuard(BuildContext context, GoRouterState state) {
+  final path = state.uri.path;
+  final authState = AppAuthState.instance;
+
+  // 1. Password recovery exception (always public)
+  if (path == AppRoutes.updatePassword) {
+    return null;
+  }
+
+  // 2. Initial session restoration / Startup phase
+  if (!authState.isInitialized) {
+    if (path == AppRoutes.splash) {
+      return null;
+    }
+    // Deep-linked while session is still restoring:
+    // Route to splash to allow session check, preserving target
+    final fullTarget = state.uri.toString();
+    return '${AppRoutes.splash}?redirect=${Uri.encodeComponent(fullTarget)}';
+  }
+
+  // 3. Initialized state evaluation
+  final bool isAuthenticated = authState.isAuthenticated;
+  final bool isLoginRoute = path == AppRoutes.login;
+  final bool isSplashRoute = path == AppRoutes.splash;
+
+  // Case A: Unauthenticated user
+  if (!isAuthenticated) {
+    if (isLoginRoute) {
+      // Already on login page, permit render
+      return null;
+    }
+    // Deep link or protected route access attempt:
+    // Determine the intended destination to restore after login
+    String targetPath;
+    if (isSplashRoute) {
+      // If coming from splash, check if a deep-link target was stored in splash params
+      final splashRedirect = state.uri.queryParameters['redirect'];
+      targetPath = (splashRedirect != null &&
+              splashRedirect.isNotEmpty &&
+              splashRedirect != AppRoutes.login &&
+              splashRedirect != AppRoutes.splash)
+          ? splashRedirect
+          : AppRoutes.dashboard;
+    } else {
+      // Direct deep link or navigation to a protected route
+      targetPath = state.uri.toString();
+    }
+
+    if (targetPath == AppRoutes.login || targetPath == AppRoutes.splash) {
+      targetPath = AppRoutes.dashboard;
+    }
+
+    return '${AppRoutes.login}?redirect=${Uri.encodeComponent(targetPath)}';
+  }
+
+  // Case B: Authenticated Super Admin / Owner
+  if (isAuthenticated) {
+    // If user is on /login or /splash:
+    if (isLoginRoute || isSplashRoute) {
+      final redirectParam = state.uri.queryParameters['redirect'];
+      if (redirectParam != null &&
+          redirectParam.isNotEmpty &&
+          redirectParam != AppRoutes.login &&
+          redirectParam != AppRoutes.splash) {
+        return redirectParam;
+      }
+      return AppRoutes.dashboard;
+    }
+
+    // Protected route: allow access!
+    return null;
+  }
+
+  return null;
+}
+
 final appRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
+  refreshListenable: AppAuthState.instance,
+  redirect: authRouteGuard,
   initialLocation: (RecoverySessionState.codeDetected ||
           RecoverySessionState.exchangeAttempted ||
           RecoverySessionState.recoveryEventReceived)
@@ -140,18 +226,18 @@ final appRouter = GoRouter(
       builder: (context, state) => const UpdatePasswordScreen(),
     ),
 
-    // Standalone secondary routes (available if deep-linked, unlinked from main nav)
+    // Settings Route (Deep link support, renders ProfileScreen)
     GoRoute(
-      path: AppRoutes.applications,
-      builder: (context, state) => const ApplicationsScreen(),
+      path: AppRoutes.settings,
+      pageBuilder: (context, state) => const NoTransitionPage(
+        child: ProfileScreen(),
+      ),
     ),
+
+    // Audit Logs Route (Immutable Administrative Event Trail)
     GoRoute(
-      path: AppRoutes.assignments,
-      builder: (context, state) => const AssignmentsScreen(),
-    ),
-    GoRoute(
-      path: AppRoutes.subscriptions,
-      builder: (context, state) => const SubscriptionsScreen(),
+      path: AppRoutes.auditLogs,
+      builder: (context, state) => const AuditLogsScreen(),
     ),
   ],
 );

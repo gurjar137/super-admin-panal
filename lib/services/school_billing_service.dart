@@ -9,10 +9,21 @@ import '../models/school_billing_overview.dart';
 import '../models/school_billing_settings_model.dart';
 import '../models/school_invoice_model.dart';
 import '../models/school_student_count_summary.dart';
+import 'audit_log_service.dart';
 import 'supabase_service.dart';
 
 class SchoolBillingService {
-  SupabaseClient? get _client => SupabaseService.instance.client;
+  final SupabaseClient? _customClient;
+  final AuditLogService _auditLogService;
+
+  SchoolBillingService({
+    SupabaseClient? client,
+    AuditLogService? auditLogService,
+  })  : _customClient = client,
+        _auditLogService = auditLogService ?? AuditLogService(client: client);
+
+  SupabaseClient? get _client => _customClient ?? SupabaseService.instance.client;
+  AuditLogService get auditLogService => _auditLogService;
 
   String? get _currentActor {
     final user = _client?.auth.currentUser;
@@ -299,7 +310,27 @@ class SchoolBillingService {
           )
           .single();
 
-      return ApiResult.success(SchoolInvoiceModel.fromJson(response));
+      final invoiceModel = SchoolInvoiceModel.fromJson(response);
+
+      // Persistent Audit Logging (Record only after DB insert succeeds)
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'invoice_created',
+          entityType: 'invoice',
+          entityId: invoiceModel.id,
+          schoolId: invoiceModel.schoolId,
+          metadata: {
+            'invoice_number': invoiceModel.invoiceNumber,
+            'total_amount': invoiceModel.totalAmount,
+            'student_count': invoiceModel.studentCount,
+            'rate_per_student': invoiceModel.ratePerStudent,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolBillingService] Audit event logging notice: $auditErr');
+      }
+
+      return ApiResult.success(invoiceModel);
     } catch (e) {
       debugPrint('[SchoolBillingService] generateInvoice error: $e');
       if (e is PostgrestException && e.code == '23505') {
@@ -309,7 +340,7 @@ class SchoolBillingService {
     }
   }
 
-  /// Records a manual full payment for an invoice.
+  /// Records a manual full payment for an invoice with strict atomic financial integrity.
   Future<ApiResult<SchoolInvoiceModel>> recordPayment({
     required String invoiceId,
     required double amount,
@@ -324,7 +355,7 @@ class SchoolBillingService {
     }
 
     try {
-      // 1. Fetch current invoice snapshot
+      // 1. Fetch current invoice snapshot and pre-validate
       final invResult = await fetchInvoiceById(invoiceId);
       final invoice = invResult.dataOrNull;
       if (invoice == null) {
@@ -351,40 +382,62 @@ class SchoolBillingService {
       }
 
       final paymentTime = paymentDate ?? DateTime.now();
-      final actor = _currentActor;
-
-      // 3. Insert into dedicated invoice_payments ledger
-      final paymentPayload = {
-        'invoice_id': invoiceId,
-        'amount': amount,
-        'payment_date': paymentTime.toIso8601String(),
-        'payment_method': paymentMethod.dbValue,
-        if (paymentReference != null && paymentReference.trim().isNotEmpty)
-          'payment_reference': paymentReference.trim(),
-        if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
-        'status': 'COMPLETED',
-        'created_by': actor,
-      };
-
+      // 3. ATOMIC SERVER-SIDE EXECUTION:
+      // Primary & Exclusive: Call the authoritative PostgreSQL stored procedure `record_invoice_payment_atomic`.
+      // The entire operation (caller verification, row locking, payment insertion, invoice update)
+      // is executed within a single database transaction. If any part fails, PostgreSQL
+      // rolls back completely, ensuring no partial state.
       try {
-        await client.from('invoice_payments').insert(paymentPayload);
-      } catch (payErr) {
-        debugPrint('[SchoolBillingService] invoice_payments insert notice: $payErr');
+        final rpcParams = {
+          'p_invoice_id': invoiceId,
+          'p_amount': amount,
+          'p_payment_method': paymentMethod.dbValue,
+          if (paymentReference != null && paymentReference.trim().isNotEmpty)
+            'p_payment_reference': paymentReference.trim(),
+          if (notes != null && notes.trim().isNotEmpty) 'p_notes': notes.trim(),
+          'p_payment_date': paymentTime.toIso8601String(),
+        };
+
+        await client.rpc('record_invoice_payment_atomic', params: rpcParams);
+      } on PostgrestException catch (pe) {
+        final isMissingRpc = pe.code == 'PGRST202' ||
+            pe.message.contains('Could not find the function') ||
+            pe.message.contains('schema cache');
+        if (isMissingRpc) {
+          debugPrint('[SchoolBillingService] record_invoice_payment_atomic RPC not found: ${pe.message}');
+          return ApiResult.failure('Payment service is temporarily unavailable.');
+        }
+        debugPrint('[SchoolBillingService] record_invoice_payment_atomic rejection: ${pe.message}');
+        return ApiResult.failure(pe.message, pe);
+      } catch (e) {
+        final errStr = e.toString();
+        if (errStr.contains('PGRST202') || errStr.contains('Could not find the function')) {
+          return ApiResult.failure('Payment service is temporarily unavailable.');
+        }
+        debugPrint('[SchoolBillingService] RPC invocation failure: $e');
+        return ApiResult.failure('Failed to record payment: $e', e);
       }
 
-      // 4. Update school_invoices status to PAID
-      final invoiceUpdatePayload = {
-        'status': 'PAID',
-        'paid_at': paymentTime.toIso8601String(),
-        'paid_by': actor,
-        'updated_at': DateTime.now().toIso8601String(),
-      };
+      // Persistent Audit Logging (Record only after atomic payment transaction succeeds)
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'payment_recorded',
+          entityType: 'payment',
+          entityId: invoiceId,
+          schoolId: invoice.schoolId,
+          metadata: {
+            'action_category': 'billing_payment',
+            'amount': amount,
+            'payment_method': paymentMethod.dbValue,
+            'invoice_number': invoice.invoiceNumber,
+            if (paymentReference != null) 'payment_reference': paymentReference.trim(),
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolBillingService] Audit event logging notice: $auditErr');
+      }
 
-      await client
-          .from('school_invoices')
-          .update(invoiceUpdatePayload)
-          .eq('id', invoiceId);
-
+      // 4. Reload full invoice and payment history from database
       return fetchInvoiceById(invoiceId);
     } catch (e) {
       debugPrint('[SchoolBillingService] recordPayment error: $e');
@@ -432,6 +485,24 @@ class SchoolBillingService {
         'updated_at': DateTime.now().toIso8601String(),
       }).eq('id', invoiceId);
 
+      // Persistent Audit Logging
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'invoice_marked_unpaid',
+          entityType: 'invoice',
+          entityId: invoiceId,
+          schoolId: invoice.schoolId,
+          metadata: {
+            'action_category': 'invoice_marked_unpaid',
+            'invoice_number': invoice.invoiceNumber,
+            'previous_status': 'PAID',
+            'new_status': 'UNPAID',
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolBillingService] Audit event logging notice: $auditErr');
+      }
+
       return fetchInvoiceById(invoiceId);
     } catch (e) {
       debugPrint('[SchoolBillingService] markAsUnpaid error: $e');
@@ -475,6 +546,23 @@ class SchoolBillingService {
         if (updatedNotes.isNotEmpty) 'notes': updatedNotes,
         'updated_at': now.toIso8601String(),
       }).eq('id', invoiceId);
+
+      // Persistent Audit Logging
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'invoice_cancelled',
+          entityType: 'invoice',
+          entityId: invoiceId,
+          schoolId: invoice.schoolId,
+          metadata: {
+            'action_category': 'invoice_cancelled',
+            'invoice_number': invoice.invoiceNumber,
+            if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[SchoolBillingService] Audit event logging notice: $auditErr');
+      }
 
       return fetchInvoiceById(invoiceId);
     } catch (e) {
@@ -569,12 +657,14 @@ class SchoolBillingService {
     return ApiResult.success(SchoolBillingFinancialSummary.fromInvoices(schoolId, invoices));
   }
 
-  /// Fetches searchable & filterable invoices for the Super Admin Invoice List.
+  /// Fetches searchable & filterable invoices with server-side pagination for the Super Admin Invoice List.
   Future<ApiResult<List<SchoolInvoiceModel>>> fetchFilteredInvoices({
     String? schoolId,
     String? billingPeriod,
     String? statusFilter,
     String? searchQuery,
+    int? page,
+    int? pageSize,
   }) async {
     final client = _client;
     if (client == null) return ApiResult.success([]);
@@ -598,34 +688,137 @@ class SchoolBillingService {
           query = query.eq('status', 'CANCELLED');
         } else if (statusFilter == 'UNPAID') {
           query = query.eq('status', 'UNPAID');
+        } else if (statusFilter == 'OVERDUE') {
+          final today = DateTime.now().toIso8601String().split('T').first;
+          query = query.neq('status', 'PAID').neq('status', 'CANCELLED').lt('due_date', today);
         }
       }
 
-      final response = await query.order('billing_period_start', ascending: false);
+      if (billingPeriod != null && billingPeriod.isNotEmpty && billingPeriod != 'All Time') {
+        try {
+          final parts = billingPeriod.trim().split(' ');
+          if (parts.length == 2) {
+            final monthName = parts[0];
+            final year = int.tryParse(parts[1]);
+            const months = {
+              'january': 1, 'february': 2, 'march': 3, 'april': 4,
+              'may': 5, 'june': 6, 'july': 7, 'august': 8,
+              'september': 9, 'october': 10, 'november': 11, 'december': 12,
+            };
+            final month = months[monthName.toLowerCase()];
+            if (month != null && year != null) {
+              final start = DateTime(year, month, 1);
+              final end = DateTime(year, month + 1, 0, 23, 59, 59);
+              query = query
+                  .gte('billing_period_start', start.toIso8601String())
+                  .lte('billing_period_start', end.toIso8601String());
+            }
+          }
+        } catch (_) {}
+      }
 
-      var list = (response as List)
+      // Server-side search filter across invoice_number and notes evaluated BEFORE range/pagination
+      if (searchQuery != null && searchQuery.trim().isNotEmpty) {
+        final term = searchQuery.trim().replaceAll(RegExp(r'[%_]'), '');
+        if (term.isNotEmpty) {
+          query = query.or('invoice_number.ilike.%$term%,notes.ilike.%$term%');
+        }
+      }
+
+      // Stable ordering: billing_period_start DESC, created_at DESC, id DESC as tie-breaker
+      final orderedQuery = query
+          .order('billing_period_start', ascending: false)
+          .order('created_at', ascending: false)
+          .order('id', ascending: false);
+
+      final PostgrestTransformBuilder finalQuery;
+      if (page != null || pageSize != null) {
+        final p = page ?? 0;
+        final ps = pageSize ?? 25;
+        final offset = p * ps;
+        finalQuery = orderedQuery.range(offset, offset + ps - 1);
+      } else {
+        finalQuery = orderedQuery;
+      }
+
+      final response = await finalQuery;
+
+      final list = (response as List)
           .map((item) => SchoolInvoiceModel.fromJson(item as Map<String, dynamic>))
           .toList();
-
-      // Filter Overdue dynamically in memory if requested
-      if (statusFilter == 'OVERDUE') {
-        list = list.where((inv) => inv.isOverdue).toList();
-      }
-
-      // Filter by search query (invoice number or school name)
-      if (searchQuery != null && searchQuery.trim().isNotEmpty) {
-        final q = searchQuery.trim().toLowerCase();
-        list = list.where((inv) {
-          final matchesNumber = inv.displayInvoiceNumber.toLowerCase().contains(q);
-          final matchesSchool = (inv.schoolName ?? '').toLowerCase().contains(q);
-          return matchesNumber || matchesSchool;
-        }).toList();
-      }
 
       return ApiResult.success(list);
     } catch (e) {
       debugPrint('[SchoolBillingService] fetchFilteredInvoices error: $e');
       return ApiResult.success([]);
+    }
+  }
+
+  /// Fetches total count of filtered invoices matching current criteria.
+  Future<ApiResult<int>> fetchFilteredInvoicesCount({
+    String? schoolId,
+    String? billingPeriod,
+    String? statusFilter,
+    String? searchQuery,
+  }) async {
+    final client = _client;
+    if (client == null) return ApiResult.success(0);
+
+    try {
+      var query = client.from('school_invoices').select('id');
+
+      if (schoolId != null && schoolId.isNotEmpty) {
+        query = query.eq('school_id', schoolId);
+      }
+
+      if (statusFilter != null && statusFilter.isNotEmpty && statusFilter != 'ALL') {
+        if (statusFilter == 'PAID') {
+          query = query.eq('status', 'PAID');
+        } else if (statusFilter == 'CANCELLED') {
+          query = query.eq('status', 'CANCELLED');
+        } else if (statusFilter == 'UNPAID') {
+          query = query.eq('status', 'UNPAID');
+        } else if (statusFilter == 'OVERDUE') {
+          final today = DateTime.now().toIso8601String().split('T').first;
+          query = query.neq('status', 'PAID').neq('status', 'CANCELLED').lt('due_date', today);
+        }
+      }
+
+      if (billingPeriod != null && billingPeriod.isNotEmpty && billingPeriod != 'All Time') {
+        try {
+          final parts = billingPeriod.trim().split(' ');
+          if (parts.length == 2) {
+            final monthName = parts[0];
+            final year = int.tryParse(parts[1]);
+            const months = {
+              'january': 1, 'february': 2, 'march': 3, 'april': 4,
+              'may': 5, 'june': 6, 'july': 7, 'august': 8,
+              'september': 9, 'october': 10, 'november': 11, 'december': 12,
+            };
+            final month = months[monthName.toLowerCase()];
+            if (month != null && year != null) {
+              final start = DateTime(year, month, 1);
+              final end = DateTime(year, month + 1, 0, 23, 59, 59);
+              query = query
+                  .gte('billing_period_start', start.toIso8601String())
+                  .lte('billing_period_start', end.toIso8601String());
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (searchQuery != null && searchQuery.trim().isNotEmpty) {
+        final term = searchQuery.trim().replaceAll(RegExp(r'[%_]'), '');
+        if (term.isNotEmpty) {
+          query = query.or('invoice_number.ilike.%$term%,notes.ilike.%$term%');
+        }
+      }
+
+      final res = await query.count(CountOption.exact);
+      return ApiResult.success(res.count);
+    } catch (e) {
+      debugPrint('[SchoolBillingService] fetchFilteredInvoicesCount error: $e');
+      return ApiResult.success(0);
     }
   }
 

@@ -5,10 +5,10 @@ class DashboardStats {
   final int activeSchools;
   final int inactiveSchools;
   final int suspendedSchools;
-  final int totalProducts;
-  final int activeProducts;
-  final int totalAssignments;
-  final int activeAssignments;
+  final int totalApps;
+  final int activeApps;
+  final int totalSubscriptions;
+  final int activeSubscriptions;
   final int expiredSubscriptions;
   final List<SchoolModel> recentSchools;
 
@@ -17,20 +17,20 @@ class DashboardStats {
     required this.activeSchools,
     required this.inactiveSchools,
     required this.suspendedSchools,
-    this.totalProducts = 0,
-    this.activeProducts = 0,
-    this.totalAssignments = 0,
-    this.activeAssignments = 0,
+    this.totalApps = 0,
+    this.activeApps = 0,
+    this.totalSubscriptions = 0,
+    this.activeSubscriptions = 0,
     this.expiredSubscriptions = 0,
     required this.recentSchools,
   });
 
   factory DashboardStats.fromAggregates({
     required List<SchoolModel> schools,
-    int totalProducts = 0,
-    int activeProducts = 0,
-    int totalAssignments = 0,
-    int activeAssignments = 0,
+    int? totalApps,
+    int? activeApps,
+    int? totalSubscriptions,
+    int? activeSubscriptions,
     int expiredSubscriptions = 0,
   }) {
     int active = 0;
@@ -55,15 +55,20 @@ class DashboardStats {
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final recent = sorted.take(5).toList();
 
+    final resolvedTotalApps = totalApps ?? 0;
+    final resolvedActiveApps = activeApps ?? 0;
+    final resolvedTotalSubs = totalSubscriptions ?? 0;
+    final resolvedActiveSubs = activeSubscriptions ?? 0;
+
     return DashboardStats(
       totalSchools: schools.length,
       activeSchools: active,
       inactiveSchools: inactive,
       suspendedSchools: suspended,
-      totalProducts: totalProducts,
-      activeProducts: activeProducts,
-      totalAssignments: totalAssignments,
-      activeAssignments: activeAssignments,
+      totalApps: resolvedTotalApps,
+      activeApps: resolvedActiveApps,
+      totalSubscriptions: resolvedTotalSubs,
+      activeSubscriptions: resolvedActiveSubs,
       expiredSubscriptions: expiredSubscriptions,
       recentSchools: recent,
     );
@@ -74,11 +79,12 @@ class DashboardStats {
     activeSchools: 0,
     inactiveSchools: 0,
     suspendedSchools: 0,
-    totalProducts: 0,
-    activeProducts: 0,
-    totalAssignments: 0,
-    activeAssignments: 0,
+    totalApps: 0,
+    activeApps: 0,
+    totalSubscriptions: 0,
+    activeSubscriptions: 0,
     expiredSubscriptions: 0,
     recentSchools: [],
   );
 }
+

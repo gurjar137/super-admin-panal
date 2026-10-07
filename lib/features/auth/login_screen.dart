@@ -55,7 +55,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
 
     if (result.isSuccess) {
-      context.go(AppRoutes.dashboard);
+      final redirectTarget = GoRouterState.of(context).uri.queryParameters['redirect'];
+      if (redirectTarget != null &&
+          redirectTarget.isNotEmpty &&
+          redirectTarget != AppRoutes.login &&
+          redirectTarget != AppRoutes.splash) {
+        context.go(redirectTarget);
+      } else {
+        context.go(AppRoutes.dashboard);
+      }
     } else {
       setState(() {
         _errorMessage = result.errorOrNull ?? 'Authentication failed.';

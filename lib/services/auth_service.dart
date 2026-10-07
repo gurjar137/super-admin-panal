@@ -1,20 +1,36 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../core/auth/app_auth_state.dart';
 import '../core/config/supabase_config.dart';
 import '../core/network/api_result.dart';
 import '../models/super_admin_model.dart';
+import 'audit_log_service.dart';
 import 'supabase_service.dart';
 
 class AuthService {
-  SupabaseClient? get _client => SupabaseService.instance.client;
+  final SupabaseClient? _customClient;
+  final AuditLogService _auditLogService;
+
+  AuthService({
+    SupabaseClient? client,
+    AuditLogService? auditLogService,
+  })  : _customClient = client,
+        _auditLogService = auditLogService ?? AuditLogService(client: client);
+
+  SupabaseClient? get _client => _customClient ?? SupabaseService.instance.client;
+  AuditLogService get auditLogService => _auditLogService;
 
   /// Check current authenticated session and enforce Super Admin authorization
   Future<SuperAdminProfile?> getActiveSuperAdminSession() async {
     final client = _client;
-    if (client == null) return null;
+    if (client == null) {
+      AppAuthState.instance.setUnauthenticated();
+      return null;
+    }
 
     final session = client.auth.currentSession;
     if (session == null || client.auth.currentUser == null) {
+      AppAuthState.instance.setUnauthenticated();
       return null;
     }
 
@@ -24,11 +40,14 @@ class AuthService {
       if (profileResult == null) {
         debugPrint('[AuthService] Current session does not have Super Admin privileges. Logging out.');
         await client.auth.signOut();
+        AppAuthState.instance.setUnauthenticated();
         return null;
       }
+      AppAuthState.instance.setProfile(profileResult);
       return profileResult;
     } catch (e) {
       debugPrint('[AuthService] Error verifying existing session: $e');
+      AppAuthState.instance.setUnauthenticated();
       return null;
     }
   }
@@ -67,13 +86,33 @@ class AuthService {
       if (checkResult.isFailure) {
         // Immediately revoke session
         await client.auth.signOut();
+        AppAuthState.instance.setUnauthenticated();
         return ApiResult.failure(checkResult.errorOrNull ?? 'This account is not authorized for Super Admin access.');
       }
 
       final superAdmin = checkResult.dataOrNull;
       if (superAdmin == null) {
         await client.auth.signOut();
+        AppAuthState.instance.setUnauthenticated();
         return ApiResult.failure('This account is not authorized for Super Admin access.');
+      }
+
+      AppAuthState.instance.setProfile(superAdmin);
+
+      // Persistent Audit Logging: super_admin_login
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'super_admin_login',
+          entityType: 'auth',
+          entityId: superAdmin.authUserId,
+          metadata: {
+            'action_category': 'auth',
+            'email': superAdmin.email,
+            'role': superAdmin.role,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[AuthService] Audit login notice: $auditErr');
       }
 
       return ApiResult.success(superAdmin);
@@ -122,20 +161,7 @@ class AuthService {
         return ApiResult.success(profile);
       }
 
-      // Check auth user_metadata fallback (for developer / seeded superadmin accounts)
-      final user = client.auth.currentUser;
-      final metaRole = user?.userMetadata?['role']?.toString().toLowerCase();
-      if (metaRole == 'super_admin' || metaRole == 'owner') {
-        return ApiResult.success(SuperAdminProfile(
-          id: authUserId,
-          authUserId: authUserId,
-          email: email,
-          name: user?.userMetadata?['name']?.toString() ?? 'Super Admin',
-          role: metaRole!,
-          status: 'active',
-        ));
-      }
-
+      // Authoritative security: If no matching profile exists in public.profiles, access is denied.
       return ApiResult.failure('This account is not authorized for Super Admin access.');
     } catch (e) {
       debugPrint('[AuthService] Role check error: $e');
@@ -143,7 +169,7 @@ class AuthService {
     }
   }
 
-  /// Verify Super Admin identity in public.profiles table or user metadata
+  /// Verify Super Admin identity strictly from public.profiles table
   Future<SuperAdminProfile?> _verifySuperAdminRole(String authUserId, String email) async {
     final res = await _checkSuperAdminAuthorization(authUserId, email);
     return res.dataOrNull;
@@ -153,12 +179,30 @@ class AuthService {
   Future<void> signOut() async {
     final client = _client;
     if (client != null) {
+      final user = client.auth.currentUser;
+      if (user != null) {
+        try {
+          await _auditLogService.recordAuditEvent(
+            action: 'super_admin_logout',
+            entityType: 'auth',
+            entityId: user.id,
+            metadata: {
+              'action_category': 'auth',
+              'email': user.email,
+            },
+          );
+        } catch (auditErr) {
+          debugPrint('[AuthService] Audit logout notice: $auditErr');
+        }
+      }
+
       try {
         await client.auth.signOut();
       } catch (e) {
         debugPrint('[AuthService] SignOut error: $e');
       }
     }
+    AppAuthState.instance.setUnauthenticated();
   }
 
   /// Request password reset email using isolated implicit client matching School/Admin App
@@ -196,6 +240,21 @@ class AuthService {
         redirectTo: redirectUrl,
       );
       debugPrint('[AuthService] Password reset email dispatched successfully via implicit recovery.');
+
+      // Persistent Audit Logging: password_reset_requested
+      try {
+        await _auditLogService.recordAuditEvent(
+          action: 'password_reset_requested',
+          entityType: 'auth',
+          metadata: {
+            'action_category': 'auth',
+            'email': trimmedEmail,
+          },
+        );
+      } catch (auditErr) {
+        debugPrint('[AuthService] Audit password reset notice: $auditErr');
+      }
+
       return ApiResult.success(null);
     } on AuthException catch (e) {
       debugPrint('[AuthService] resetPasswordForEmail AuthException: ${e.message}');
