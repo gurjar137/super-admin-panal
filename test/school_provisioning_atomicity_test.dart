@@ -659,5 +659,119 @@ void main() {
       // Should display error banner and remain on Step 1
       expect(find.text('School Name is required.'), findsOneWidget);
     });
+
+    test('15. Academic Year Onboarding: Valid request initializes active 2026-2027 session', () {
+      final req = SchoolProvisioningRequest(
+        schoolName: 'MKC Public School',
+        schoolCode: 'MKC-01',
+        appName: 'MKC App',
+        packageBundleId: 'com.school.app.mkc',
+        appIdentifier: 'MKC_APP',
+        adminFullName: 'Manish Kumar',
+        adminEmail: 'manishk@test.edu',
+        adminPassword: 'Password123!',
+        planName: 'Annual School License',
+        startDate: DateTime(2026, 4, 1),
+        endDate: DateTime(2027, 3, 31),
+        academicYearName: '2026-2027',
+        academicYearStartDate: DateTime(2026, 4, 1),
+        academicYearEndDate: DateTime(2027, 3, 31),
+        academicYearStatus: 'active',
+        idempotencyKey: 'idemp-ay-001',
+      );
+
+      final errors = req.validate();
+      expect(errors, isEmpty);
+      expect(req.academicYearName, '2026-2027');
+      expect(req.academicYearStatus, 'active');
+      expect(req.academicYearStartDate, DateTime(2026, 4, 1));
+      expect(req.academicYearEndDate, DateTime(2027, 3, 31));
+    });
+
+    test('16. Academic Year Onboarding: Invalid date sequence is rejected by validation', () {
+      final req = SchoolProvisioningRequest(
+        schoolName: 'MKC Public School',
+        schoolCode: 'MKC-01',
+        appName: 'MKC App',
+        packageBundleId: 'com.school.app.mkc',
+        appIdentifier: 'MKC_APP',
+        adminFullName: 'Manish Kumar',
+        adminEmail: 'manishk@test.edu',
+        adminPassword: 'Password123!',
+        startDate: DateTime(2026, 4, 1),
+        endDate: DateTime(2027, 3, 31),
+        academicYearName: '2026-2027',
+        academicYearStartDate: DateTime(2027, 4, 1),
+        academicYearEndDate: DateTime(2026, 3, 31), // end before start
+        idempotencyKey: 'idemp-ay-002',
+      );
+
+      final errors = req.validate();
+      expect(errors.containsKey('academicYearEndDate'), isTrue);
+      expect(errors['academicYearEndDate'], contains('cannot be earlier than start date'));
+    });
+
+    test('17. Canonical School UUID propagates consistently across School, App, Admin, Subscription, Billing and Academic Year', () {
+      const canonicalSchoolId = '4813e425-1eb8-46df-a7d9-2efa208c7a7a';
+      const canonicalAppId = '00e04931-76ab-4ea9-95bd-61e5109b4056';
+      const canonicalAyId = '77e04931-76ab-4ea9-95bd-61e5109b4099';
+
+      final school = SchoolModel(
+        id: canonicalSchoolId,
+        schoolCode: 'MKC-BKC-01',
+        name: 'mkc',
+        status: SchoolStatus.active,
+        createdAt: now,
+      );
+
+      final app = SchoolAppModel(
+        id: canonicalAppId,
+        schoolId: school.id,
+        appName: 'MKC App',
+        packageName: 'com.school.app.mkc',
+        appIdentifier: 'MKC_BKC_01_APP',
+        currentVersion: '1.0.0',
+        status: SchoolAppStatus.active,
+        createdAt: now,
+      );
+
+      final admin = SchoolAdminModel(
+        id: 'prof-123',
+        authUserId: 'auth-user-123',
+        schoolId: school.id,
+        fullName: 'Manish Kumar',
+        email: 'manishk@gmail.com',
+        role: 'school_admin',
+        status: 'active',
+        createdAt: now,
+      );
+
+      final subscription = SubscriptionModel(
+        id: 'sub-123',
+        schoolAppId: app.id,
+        planName: 'Annual School License',
+        startDate: now,
+        endDate: oneYearLater,
+        status: SubscriptionStatus.active,
+        createdAt: now,
+      );
+
+      final result = SchoolProvisioningResult(
+        school: school,
+        app: app,
+        admin: admin,
+        subscription: subscription,
+        billingSettingsId: 'bill-123',
+        academicYearId: canonicalAyId,
+      );
+
+      // Verify canonical UUID propagation
+      expect(result.school.id, equals(canonicalSchoolId));
+      expect(result.app.schoolId, equals(canonicalSchoolId));
+      expect(result.admin.schoolId, equals(canonicalSchoolId));
+      expect(result.academicYearId, equals(canonicalAyId));
+      expect(result.billingSettingsId, equals('bill-123'));
+      expect(result.subscription.schoolAppId, equals(canonicalAppId));
+    });
   });
 }

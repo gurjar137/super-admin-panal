@@ -40,7 +40,13 @@ class SchoolProvisioningRequest {
   final String currency;
   final String billingCycle;
 
-  // 5. Idempotency Key (prevents duplicate submission)
+  // 5. Initial Academic Year Information
+  final String academicYearName;
+  final DateTime academicYearStartDate;
+  final DateTime academicYearEndDate;
+  final String academicYearStatus;
+
+  // 6. Idempotency Key (prevents duplicate submission)
   final String idempotencyKey;
 
   const SchoolProvisioningRequest({
@@ -69,8 +75,13 @@ class SchoolProvisioningRequest {
     this.ratePerStudent = 20.00,
     this.currency = 'INR',
     this.billingCycle = 'MONTHLY',
+    this.academicYearName = '2026-2027',
+    DateTime? academicYearStartDate,
+    DateTime? academicYearEndDate,
+    this.academicYearStatus = 'active',
     required this.idempotencyKey,
-  });
+  })  : academicYearStartDate = academicYearStartDate ?? startDate,
+        academicYearEndDate = academicYearEndDate ?? endDate;
 
   /// Validates all fields across all components before submission
   Map<String, String> validate() {
@@ -124,6 +135,14 @@ class SchoolProvisioningRequest {
       errors['endDate'] = 'Subscription end date cannot be earlier than start date';
     }
 
+    // Academic Year validation
+    if (academicYearName.trim().isEmpty) {
+      errors['academicYearName'] = 'Academic Year Name is required';
+    }
+    if (academicYearEndDate.isBefore(academicYearStartDate)) {
+      errors['academicYearEndDate'] = 'Academic Year end date cannot be earlier than start date';
+    }
+
     return errors;
   }
 }
@@ -136,6 +155,7 @@ class SchoolProvisioningResult {
   final SchoolAdminModel admin;
   final SubscriptionModel subscription;
   final String? billingSettingsId;
+  final String? academicYearId;
   final bool isIdempotentReplay;
 
   const SchoolProvisioningResult({
@@ -144,6 +164,7 @@ class SchoolProvisioningResult {
     required this.admin,
     required this.subscription,
     this.billingSettingsId,
+    this.academicYearId,
     this.isIdempotentReplay = false,
   });
 }

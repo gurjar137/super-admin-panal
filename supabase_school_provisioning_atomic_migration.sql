@@ -229,6 +229,10 @@ CREATE OR REPLACE FUNCTION public.provision_school_atomic(
     p_billing_rate NUMERIC DEFAULT 20.00,
     p_billing_currency TEXT DEFAULT 'INR',
     p_billing_cycle TEXT DEFAULT 'MONTHLY',
+    p_academic_year_name TEXT DEFAULT '2026-2027',
+    p_ay_start_date DATE DEFAULT '2026-04-01'::date,
+    p_ay_end_date DATE DEFAULT '2027-03-31'::date,
+    p_ay_status TEXT DEFAULT 'active',
     p_idempotency_key TEXT DEFAULT NULL
 )
 RETURNS JSONB
@@ -243,6 +247,7 @@ DECLARE
     v_app_id UUID;
     v_billing_id UUID;
     v_sub_id UUID;
+    v_ay_id UUID;
     v_profile_id UUID;
     v_norm_code TEXT;
     v_norm_pkg TEXT;
@@ -489,7 +494,26 @@ BEGIN
         now()
     ) RETURNING id INTO v_profile_id;
 
-    -- 11. Build Result Payload
+    -- 11. ATOMIC STEP 6: Insert Initial Academic Year Session
+    INSERT INTO public.academic_years (
+        school_id,
+        name,
+        start_date,
+        end_date,
+        status,
+        created_at,
+        updated_at
+    ) VALUES (
+        v_school_id,
+        COALESCE(NULLIF(TRIM(p_academic_year_name), ''), '2026-2027'),
+        COALESCE(p_ay_start_date, '2026-04-01'::date),
+        COALESCE(p_ay_end_date, '2027-03-31'::date),
+        LOWER(COALESCE(NULLIF(TRIM(p_ay_status), ''), 'active')),
+        now(),
+        now()
+    ) RETURNING id INTO v_ay_id;
+
+    -- 12. Build Result Payload
     v_result := jsonb_build_object(
         'success', true,
         'school_id', v_school_id,
@@ -498,6 +522,7 @@ BEGIN
         'billing_settings_id', v_billing_id,
         'subscription_id', v_sub_id,
         'profile_id', v_profile_id,
+        'academic_year_id', v_ay_id,
         'auth_user_id', p_admin_auth_user_id,
         'idempotent_replay', false
     );
@@ -617,3 +642,39 @@ REVOKE ALL ON FUNCTION public.cleanup_orphaned_provisioning_auth_user(TEXT, UUID
 REVOKE ALL ON FUNCTION public.cleanup_orphaned_provisioning_auth_user(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.cleanup_orphaned_provisioning_auth_user(TEXT, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cleanup_orphaned_provisioning_auth_user(UUID) TO authenticated;
+
+-- ------------------------------------------------------------------------------
+-- 5. ACADEMIC YEARS RLS HARDENING FOR SUPER ADMIN OS
+-- ------------------------------------------------------------------------------
+-- Ensure Super Admins and Owners can view, insert, update, and manage academic years across any school
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE schemaname = 'public' 
+        AND tablename = 'academic_years' 
+        AND policyname = 'Super Admins manage academic years'
+    ) THEN
+        CREATE POLICY "Super Admins manage academic years"
+        ON public.academic_years
+        FOR ALL
+        TO authenticated
+        USING (
+            EXISTS (
+                SELECT 1 FROM public.profiles p
+                WHERE p.auth_user_id = auth.uid()
+                AND p.role IN ('super_admin', 'owner')
+                AND p.status = 'active'
+            )
+        )
+        WITH CHECK (
+            EXISTS (
+                SELECT 1 FROM public.profiles p
+                WHERE p.auth_user_id = auth.uid()
+                AND p.role IN ('super_admin', 'owner')
+                AND p.status = 'active'
+            )
+        );
+    END IF;
+END $$;
+

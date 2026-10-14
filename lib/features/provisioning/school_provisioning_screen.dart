@@ -53,12 +53,18 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
   final _adminPasswordCtrl = TextEditingController();
   bool _obscureAdminPassword = true;
 
-  // Step 4: Subscription Controllers
+  // Step 4: Subscription & Academic Year Controllers
   final _planNameCtrl = TextEditingController(text: 'Annual School License');
   DateTime _startDate = DateTime.now();
   late DateTime _endDate = DateTime.now().add(const Duration(days: 365));
   SubscriptionStatus _subStatus = SubscriptionStatus.active;
   final _subNotesCtrl = TextEditingController(text: 'Initial school provisioning subscription');
+
+  // Academic Year Session Onboarding
+  final _academicYearNameCtrl = TextEditingController(text: '2026-2027');
+  DateTime _ayStartDate = DateTime(2026, 4, 1);
+  DateTime _ayEndDate = DateTime(2027, 3, 31);
+  String _ayStatus = 'active';
 
   // Created entities (populated atomically upon confirmation)
   SchoolProvisioningResult? _provisioningResult;
@@ -89,6 +95,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
 
     _planNameCtrl.dispose();
     _subNotesCtrl.dispose();
+    _academicYearNameCtrl.dispose();
     super.dispose();
   }
 
@@ -190,7 +197,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
     });
   }
 
-  // STEP 4: VALIDATE SUBSCRIPTION (In-memory, 0 DB mutations)
+  // STEP 4: VALIDATE SUBSCRIPTION & ACADEMIC YEAR (In-memory, 0 DB mutations)
   void _handleStep4Next() {
     setState(() => _stepError = null);
 
@@ -201,6 +208,16 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
     }
     if (_endDate.isBefore(_startDate)) {
       setState(() => _stepError = 'End Date cannot be earlier than Start Date.');
+      return;
+    }
+
+    final ayName = _academicYearNameCtrl.text.trim();
+    if (ayName.isEmpty) {
+      setState(() => _stepError = 'Academic Year Name is required (e.g. 2026-2027).');
+      return;
+    }
+    if (_ayEndDate.isBefore(_ayStartDate)) {
+      setState(() => _stepError = 'Academic Year End Date cannot be earlier than Start Date.');
       return;
     }
 
@@ -245,6 +262,10 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       ratePerStudent: 20.00,
       currency: 'INR',
       billingCycle: 'MONTHLY',
+      academicYearName: _academicYearNameCtrl.text.trim(),
+      academicYearStartDate: _ayStartDate,
+      academicYearEndDate: _ayEndDate,
+      academicYearStatus: _ayStatus,
       idempotencyKey: idempotencyKey,
     );
 
@@ -310,6 +331,11 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
       _endDate = DateTime.now().add(const Duration(days: 365));
       _subStatus = SubscriptionStatus.active;
       _subNotesCtrl.text = 'Initial school provisioning subscription';
+
+      _academicYearNameCtrl.text = '2026-2027';
+      _ayStartDate = DateTime(2026, 4, 1);
+      _ayEndDate = DateTime(2027, 3, 31);
+      _ayStatus = 'active';
     });
   }
 
@@ -831,6 +857,86 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
             hint: 'Initial provisioning license',
           ),
           const SizedBox(height: 24),
+          const Divider(height: 1),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Icon(Icons.date_range_rounded, size: 20, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text(
+                'Academic Year Onboarding (Initial School Session)',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Every operational school requires an active academic year for student admissions, class enrollment, and attendance records.',
+            style: TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 16),
+          AppTextField(
+            controller: _academicYearNameCtrl,
+            label: 'Academic Session Name *',
+            hint: 'e.g. 2026-2027',
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Session Start Date', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  subtitle: Text(dateFormat.format(_ayStartDate), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  trailing: const Icon(Icons.calendar_today_rounded, size: 18),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _ayStartDate,
+                      firstDate: DateTime(2025),
+                      lastDate: DateTime(2035),
+                    );
+                    if (picked != null) setState(() => _ayStartDate = picked);
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Session End Date', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  subtitle: Text(dateFormat.format(_ayEndDate), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  trailing: const Icon(Icons.calendar_today_rounded, size: 18),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _ayEndDate,
+                      firstDate: DateTime(2025),
+                      lastDate: DateTime(2035),
+                    );
+                    if (picked != null) setState(() => _ayEndDate = picked);
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            initialValue: _ayStatus,
+            decoration: const InputDecoration(labelText: 'Academic Year Status'),
+            items: const [
+              DropdownMenuItem(value: 'active', child: Text('ACTIVE (Current Session)')),
+              DropdownMenuItem(value: 'upcoming', child: Text('UPCOMING')),
+              DropdownMenuItem(value: 'closed', child: Text('CLOSED')),
+            ],
+            onChanged: (val) {
+              if (val != null) setState(() => _ayStatus = val);
+            },
+          ),
+          const SizedBox(height: 24),
           Row(
             children: [
               Expanded(
@@ -887,7 +993,7 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
                     ),
                     SizedBox(height: 4),
                     Text(
-                      'All 5 operational records (School, App, Admin Profile, Subscription, and Billing Settings) will be created inside a single transactional operation with automatic rollback protection.',
+                      'All 6 operational records (School, App, Admin Profile, Subscription, Billing Settings, and Academic Year) will be created inside a single transactional operation with automatic rollback protection.',
                       style: TextStyle(fontSize: 12.5, color: AppColors.textSecondary, height: 1.3),
                     ),
                   ],
@@ -961,7 +1067,19 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
         const SizedBox(height: 16),
 
         _buildReviewSectionCard(
-          title: '5. Per-Student Billing Settings (public.school_billing_settings)',
+          title: '5. Initial Academic Session (public.academic_years)',
+          icon: Icons.date_range_rounded,
+          onEdit: () => setState(() => _currentStep = 3),
+          items: [
+            {'label': 'Session Name', 'value': _academicYearNameCtrl.text.trim()},
+            {'label': 'Session Dates', 'value': '${dateFormat.format(_ayStartDate)} to ${dateFormat.format(_ayEndDate)}'},
+            {'label': 'Session Status', 'value': _ayStatus.toUpperCase()},
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildReviewSectionCard(
+          title: '6. Per-Student Billing Settings (public.school_billing_settings)',
           icon: Icons.receipt_long_rounded,
           onEdit: null,
           items: [
@@ -1130,7 +1248,19 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
         const SizedBox(height: 16),
 
         _buildSummaryCard(
-          title: '5. Default Billing Settings (public.school_billing_settings)',
+          title: '5. Initial Academic Session (public.academic_years)',
+          icon: Icons.date_range_rounded,
+          items: [
+            {'label': 'Session Name', 'value': _academicYearNameCtrl.text.trim()},
+            {'label': 'Session Dates', 'value': '${dateFormat.format(_ayStartDate)} to ${dateFormat.format(_ayEndDate)}'},
+            {'label': 'Academic Year ID', 'value': _provisioningResult?.academicYearId ?? 'Auto-Provisioned', 'isUuid': true},
+            {'label': 'Status', 'value': _ayStatus.toUpperCase()},
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildSummaryCard(
+          title: '6. Default Billing Settings (public.school_billing_settings)',
           icon: Icons.receipt_long_rounded,
           items: [
             {'label': 'Rate Per Student', 'value': '₹20.00'},
@@ -1138,6 +1268,83 @@ class _SchoolProvisioningScreenState extends ConsumerState<SchoolProvisioningScr
             {'label': 'Billing Cycle', 'value': 'MONTHLY'},
             {'label': 'Billing Setting ID', 'value': _provisioningResult?.billingSettingsId ?? 'Auto-Created', 'isUuid': true},
           ],
+        ),
+        const SizedBox(height: 16),
+
+        // Dedicated vs Multi-Tenant Developer Build Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.borderLight),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.terminal_rounded, size: 18, color: AppColors.primary),
+                  SizedBox(width: 8),
+                  Text(
+                    '7. Developer Build Commands & App Identity Propagation',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                  ),
+                ],
+              ),
+              const Divider(height: 20),
+              const Text(
+                'Dedicated School Build Command:',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: SelectableText(
+                  'flutter build apk --release --dart-define=SCHOOL_ID=${_createdSchool?.id ?? ''} --dart-define=APP_IDENTIFIER=${_createdApp?.appIdentifier ?? ''}',
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, color: Color(0xFF38BDF8)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      final cmd = 'flutter build apk --release --dart-define=SCHOOL_ID=${_createdSchool?.id ?? ''} --dart-define=APP_IDENTIFIER=${_createdApp?.appIdentifier ?? ''}';
+                      Clipboard.setData(ClipboardData(text: cmd));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Dedicated build command copied to clipboard')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded, size: 14),
+                    label: const Text('Copy Dedicated Build Command', style: TextStyle(fontSize: 12)),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      final flags = '--dart-define=SCHOOL_ID=${_createdSchool?.id ?? ''} --dart-define=APP_IDENTIFIER=${_createdApp?.appIdentifier ?? ''}';
+                      Clipboard.setData(ClipboardData(text: flags));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Dart-define flags copied to clipboard')),
+                      );
+                    },
+                    icon: const Icon(Icons.flag_outlined, size: 14),
+                    label: const Text('Copy --dart-define Flags', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Note: For Dynamic Multi-Tenant Builds (Shared APK), omit --dart-define flags. The School Management App will dynamically resolve tenant identity from the administrator\'s authenticated profile (profiles.school_id).',
+                style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary, height: 1.3),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 28),
 

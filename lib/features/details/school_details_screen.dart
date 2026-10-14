@@ -1444,7 +1444,7 @@ class _SchoolDetailsScreenState extends ConsumerState<SchoolDetailsScreen> {
             const SizedBox(height: 16),
 
             // 3. Android Studio Workflow Setup Guide (Phase 6 Requirement 6)
-            _buildDeveloperWorkflowGuide(context, app),
+            _buildDeveloperWorkflowGuide(context, school, app),
           ],
         );
       },
@@ -2451,10 +2451,18 @@ class _SchoolDetailsScreenState extends ConsumerState<SchoolDetailsScreen> {
                   icon: Icons.account_balance_rounded,
                 ),
                 _buildSummaryBadge(
-                  label: 'Management App',
-                  value: app != null ? (app.isActive ? 'ACTIVE' : 'INACTIVE') : 'NOT CONFIGURED',
+                  label: 'App Config Status',
+                  value: app != null ? (app.isActive ? 'CONFIGURED (ACTIVE)' : 'INACTIVE') : 'NOT CONFIGURED',
                   isPositive: app?.isActive ?? false,
                   icon: Icons.smartphone_rounded,
+                ),
+                _buildSummaryBadge(
+                  label: 'Build / Deploy Status',
+                  value: app?.playStoreUrl != null && app!.playStoreUrl!.isNotEmpty
+                      ? 'RELEASED'
+                      : (app != null ? 'CONFIGURED (PENDING STORE RELEASE)' : 'NOT BUILT'),
+                  isPositive: app?.playStoreUrl != null && app!.playStoreUrl!.isNotEmpty,
+                  icon: Icons.rocket_launch_outlined,
                 ),
                 _buildSummaryBadge(
                   label: 'App Identifier',
@@ -2598,6 +2606,124 @@ class _SchoolDetailsScreenState extends ConsumerState<SchoolDetailsScreen> {
             _copyableInfoRow('Supabase Anon Key', SupabaseConfig.publishableKey),
 
             const SizedBox(height: 14),
+            // Build Mode Commands & Badges
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.borderLight),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.build_circle_outlined, size: 18, color: AppColors.primary),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Dedicated Build Command (School-Specific)',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                      ),
+                      const Spacer(),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(4),
+                        onTap: () {
+                          final cmd = _generateDedicatedBuildCommand(school: school, app: app);
+                          _copyToClipboard(context, cmd, 'Dedicated Build Command');
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          child: Row(
+                            children: [
+                              Icon(Icons.copy_rounded, size: 14, color: AppColors.primary),
+                              SizedBox(width: 4),
+                              Text('Copy Command', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: SelectableText(
+                      _generateDedicatedBuildCommand(school: school, app: app),
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11.5,
+                        color: Color(0xFF38BDF8),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Compiles a standalone APK/AAB tied directly to this school tenant without relying on client profile lookup.',
+                    style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(height: 1),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.hub_outlined, size: 18, color: Color(0xFF0284C7)),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Dynamic Multi-Tenant Mode Command (Shared Build)',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                      ),
+                      const Spacer(),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(4),
+                        onTap: () {
+                          final cmd = _generateMultiTenantBuildCommand();
+                          _copyToClipboard(context, cmd, 'Shared Multi-Tenant Build Command');
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          child: Row(
+                            children: [
+                              Icon(Icons.copy_rounded, size: 14, color: Color(0xFF0284C7)),
+                              SizedBox(width: 4),
+                              Text('Copy Command', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF0284C7))),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: SelectableText(
+                      _generateMultiTenantBuildCommand(),
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11.5,
+                        color: Color(0xFF34D399),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Compiles a single shared multi-tenant APK/AAB. School identity resolves dynamically at runtime from the authenticated user\'s profile (profiles.school_id).',
+                    style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -2642,6 +2768,14 @@ class _SchoolDetailsScreenState extends ConsumerState<SchoolDetailsScreen> {
                   icon: const Icon(Icons.code_rounded, size: 16),
                   label: const Text('Copy Configuration (.env)'),
                 ),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    final flags = '--dart-define=SCHOOL_ID=${school.id} --dart-define=APP_IDENTIFIER=${app.appIdentifier ?? ''}';
+                    _copyToClipboard(context, flags, 'Dart Define Compilation Flags');
+                  },
+                  icon: const Icon(Icons.flag_outlined, size: 16),
+                  label: const Text('Copy --dart-define Flags'),
+                ),
               ],
             ),
           ],
@@ -2650,7 +2784,7 @@ class _SchoolDetailsScreenState extends ConsumerState<SchoolDetailsScreen> {
     );
   }
 
-  Widget _buildDeveloperWorkflowGuide(BuildContext context, SchoolAppModel app) {
+  Widget _buildDeveloperWorkflowGuide(BuildContext context, SchoolModel school, SchoolAppModel app) {
     return Card(
       elevation: 1,
       shape: RoundedRectangleBorder(
@@ -2697,7 +2831,7 @@ class _SchoolDetailsScreenState extends ConsumerState<SchoolDetailsScreen> {
             _buildWorkflowStep(2, 'Change App Name', 'Set the branded app title to "${app.appName}" in android/app/src/main/res/values/strings.xml or manifest.'),
             _buildWorkflowStep(3, 'Change App Icon/Logo', 'Replace launcher icon assets in res/mipmap-* with the school branding assets.'),
             _buildWorkflowStep(4, 'Change Android Package Name', 'Set applicationId = "${app.packageName ?? 'com.company.schoolapp'}" in android/app/build.gradle.'),
-            _buildWorkflowStep(5, 'Set APP_IDENTIFIER', 'Set AppConfig.appIdentifier = "${app.appIdentifier ?? 'ABC_SCHOOL_APP'}" or compile with --dart-define=APP_IDENTIFIER=${app.appIdentifier ?? 'ABC_SCHOOL_APP'}.'),
+            _buildWorkflowStep(5, 'Build Mode Configuration (Dedicated vs Dynamic)', 'For Dedicated School Builds: compile with --dart-define=SCHOOL_ID=${school.id} --dart-define=APP_IDENTIFIER=${app.appIdentifier ?? 'ABC_SCHOOL_APP'}.\nFor Dynamic Multi-Tenant Builds: omit both dart-defines; the School Management App will dynamically resolve tenant identity from the authenticated administrator\'s profile (profiles.school_id).'),
             _buildWorkflowStep(6, 'Verify Supabase Backend', 'Confirm the client connects to ${SupabaseConfig.url} with the public publishable anon key.'),
             _buildWorkflowStep(7, 'Build AAB in Android Studio', 'Select Build > Generate Signed Bundle / APK to produce the signed production Android App Bundle (.aab).'),
             _buildWorkflowStep(8, 'Publish to Google Play Store', 'Upload the signed .aab to Google Play Console under the school\'s dedicated developer account or listing.'),
@@ -2889,6 +3023,17 @@ CURRENT_VERSION=${app.currentVersion}
 SUPABASE_URL=${SupabaseConfig.url}
 SUPABASE_PUBLISHABLE_KEY=${SupabaseConfig.publishableKey}
 ''';
+  }
+
+  String _generateDedicatedBuildCommand({
+    required SchoolModel school,
+    required SchoolAppModel app,
+  }) {
+    return 'flutter build apk --release --dart-define=SCHOOL_ID=${school.id} --dart-define=APP_IDENTIFIER=${app.appIdentifier ?? ''}';
+  }
+
+  String _generateMultiTenantBuildCommand() {
+    return 'flutter build apk --release';
   }
 
   // ==========================================

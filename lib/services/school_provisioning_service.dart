@@ -245,6 +245,10 @@ class SchoolProvisioningService {
           'p_billing_rate': req.ratePerStudent,
           'p_billing_currency': req.currency,
           'p_billing_cycle': req.billingCycle,
+          'p_academic_year_name': req.academicYearName.trim(),
+          'p_ay_start_date': req.academicYearStartDate.toIso8601String().split('T').first,
+          'p_ay_end_date': req.academicYearEndDate.toIso8601String().split('T').first,
+          'p_ay_status': req.academicYearStatus.trim(),
           if (key.isNotEmpty) 'p_idempotency_key': key,
         };
 
@@ -292,6 +296,7 @@ class SchoolProvisioningService {
           admin: SchoolAdminModel.fromJson(adminData),
           subscription: SubscriptionModel.fromJson(subData),
           billingSettingsId: rpcOutput['billing_settings_id']?.toString(),
+          academicYearId: rpcOutput['academic_year_id']?.toString(),
           isIdempotentReplay: rpcOutput['idempotent_replay'] == true,
         );
 
@@ -303,6 +308,7 @@ class SchoolProvisioningService {
       // (Used when SQL migration is pending deployment)
       String? createdSchoolId;
       String? createdAppId;
+      String? createdAyId;
 
       try {
         // A. Insert School
@@ -356,7 +362,25 @@ class SchoolProvisioningService {
         };
         final subResp = await client.from('school_app_subscriptions').insert(subPayload).select('*, school_management_apps(id, app_name, school_id, schools(id, name))').single();
 
-        // E. Insert Profile
+        // E. Insert Initial Academic Year
+        try {
+          final ayPayload = {
+            'school_id': createdSchoolId,
+            'name': req.academicYearName.trim(),
+            'start_date': req.academicYearStartDate.toIso8601String().split('T').first,
+            'end_date': req.academicYearEndDate.toIso8601String().split('T').first,
+            'status': req.academicYearStatus.trim(),
+            'created_at': DateTime.now().toIso8601String(),
+            'updated_at': DateTime.now().toIso8601String(),
+          };
+          final ayResp = await client.from('academic_years').insert(ayPayload).select().single();
+          createdAyId = ayResp['id'].toString();
+          debugPrint('[SchoolProvisioningService] Initialized academic year $createdAyId for school $createdSchoolId');
+        } catch (ayErr) {
+          debugPrint('[SchoolProvisioningService] Warning: Client fallback academic year insert error: $ayErr');
+        }
+
+        // F. Insert Profile
         final profilePayload = {
           'auth_user_id': newAuthUserId,
           'school_id': createdSchoolId,
@@ -377,6 +401,7 @@ class SchoolProvisioningService {
           app: SchoolAppModel.fromJson(appResp),
           admin: SchoolAdminModel.fromJson(profileResp),
           subscription: SubscriptionModel.fromJson(subResp),
+          academicYearId: createdAyId,
         );
 
         await _recordProvisioningSuccess(result, key);
