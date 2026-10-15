@@ -24,7 +24,7 @@ class AppAuthState extends ChangeNotifier {
   SuperAdminProfile? get currentProfile => _currentProfile;
 
   /// Strict authentication check:
-  /// Profile must exist, must have role 'super_admin' or 'owner', and must have status 'active'.
+  /// Profile must exist, must have role 'super_admin', 'platform_admin', or 'owner', and must have status 'active'.
   bool get isAuthenticated =>
       _currentProfile != null &&
       _currentProfile!.isSuperAdmin &&

@@ -44,6 +44,19 @@ void main() {
       expect(owner.isSuperAdmin, isTrue);
       expect(owner.status, 'active');
       expect(owner.schoolId, isNull);
+
+      final platformAdmin = SuperAdminProfile.fromJson({
+        'id': 'prof-platform',
+        'auth_user_id': 'auth-user-platform',
+        'email': 'admin@platform.com',
+        'full_name': 'Platform Administrator',
+        'role': 'platform_admin',
+        'status': 'active',
+        'school_id': null,
+      });
+
+      expect(platformAdmin.isSuperAdmin, isTrue);
+      expect(platformAdmin.status, 'active');
     });
 
     test('B. Unauthorized roles (teacher, school_admin, parent, staff) are denied Super Admin access', () {

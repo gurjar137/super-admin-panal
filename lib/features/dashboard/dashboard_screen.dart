@@ -176,13 +176,6 @@ class DashboardScreen extends ConsumerWidget {
     bool isDesktop,
     bool isWide,
   ) {
-    int crossAxisCount = 1;
-    if (isDesktop) {
-      crossAxisCount = 4;
-    } else if (isWide) {
-      crossAxisCount = 2;
-    }
-
     final cards = [
       MetricCard(
         title: 'Total Schools',
@@ -234,14 +227,33 @@ class DashboardScreen extends ConsumerWidget {
       ),
     ];
 
-    return GridView.count(
-      crossAxisCount: crossAxisCount,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: crossAxisCount == 1 ? 2.6 : 1.7,
-      children: cards,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        int crossAxisCount;
+        double childAspectRatio;
+
+        if (width >= 860) {
+          crossAxisCount = 4;
+          childAspectRatio = 1.4;
+        } else if (width >= 580) {
+          crossAxisCount = 2;
+          childAspectRatio = 2.0;
+        } else {
+          crossAxisCount = 1;
+          childAspectRatio = 2.4;
+        }
+
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+          childAspectRatio: childAspectRatio,
+          children: cards,
+        );
+      },
     );
   }
 

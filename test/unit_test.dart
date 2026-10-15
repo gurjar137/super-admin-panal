@@ -409,6 +409,16 @@ void main() {
       );
       expect(owner.isSuperAdmin, isTrue);
 
+      final platformAdmin = SuperAdminProfile(
+        id: '4',
+        authUserId: 'auth-4',
+        email: 'platform@schoolos.com',
+        name: 'Platform Administrator',
+        role: 'platform_admin',
+        status: 'active',
+      );
+      expect(platformAdmin.isSuperAdmin, isTrue);
+
       final schoolAdmin = SuperAdminProfile(
         id: '3',
         authUserId: 'auth-3',

@@ -27,6 +27,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final passwordController = TextEditingController();
     final confirmPasswordController = TextEditingController();
     String? localError;
+    bool isSubmitting = false;
 
     showDialog(
       context: context,
@@ -52,44 +53,72 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               TextField(
                 controller: passwordController,
                 obscureText: true,
+                enabled: !isSubmitting,
                 decoration: const InputDecoration(labelText: 'New Master Password'),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: confirmPasswordController,
                 obscureText: true,
+                enabled: !isSubmitting,
                 decoration: const InputDecoration(labelText: 'Confirm Master Password'),
               ),
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () async {
-                final p1 = passwordController.text;
-                final p2 = confirmPasswordController.text;
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final p1 = passwordController.text;
+                      final p2 = confirmPasswordController.text;
 
-                if (p1.isEmpty || p1.length < 8) {
-                  setModalState(() => localError = 'Password must be at least 8 characters.');
-                  return;
-                }
-                if (p1 != p2) {
-                  setModalState(() => localError = 'Passwords do not match.');
-                  return;
-                }
+                      if (p1.isEmpty || p1.length < 8) {
+                        setModalState(() => localError = 'Password must be at least 8 characters.');
+                        return;
+                      }
+                      if (p1 != p2) {
+                        setModalState(() => localError = 'Passwords do not match.');
+                        return;
+                      }
 
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Password change request submitted successfully.'),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
-              },
-              child: const Text('Update Password'),
+                      setModalState(() {
+                        localError = null;
+                        isSubmitting = true;
+                      });
+
+                      final result = await ref.read(authRepositoryProvider).updatePassword(p1);
+
+                      if (!ctx.mounted) return;
+
+                      if (result.isSuccess) {
+                        Navigator.pop(ctx);
+                        if (mounted) {
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Master password updated successfully.'),
+                              backgroundColor: AppColors.success,
+                            ),
+                          );
+                        }
+                      } else {
+                        setModalState(() {
+                          isSubmitting = false;
+                          localError = result.errorOrNull ?? 'Failed to update password.';
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Update Password'),
             ),
           ],
         ),

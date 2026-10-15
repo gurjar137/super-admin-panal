@@ -20,7 +20,9 @@ class SuperAdminProfile {
   });
 
   bool get isSuperAdmin =>
-      role.toLowerCase() == 'super_admin' || role.toLowerCase() == 'owner';
+      role.toLowerCase() == 'super_admin' ||
+      role.toLowerCase() == 'platform_admin' ||
+      role.toLowerCase() == 'owner';
 
   factory SuperAdminProfile.fromJson(Map<String, dynamic> json) {
     return SuperAdminProfile(
